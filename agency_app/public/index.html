@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TutorFlow Agency</title>
+    <link rel="stylesheet" href="/styles.css?v=agency-hardening-2">
+  </head>
+  <body>
+    <main id="authScreen" class="auth-screen">
+      <section class="auth-card">
+        <p class="eyebrow">TutorFlow Agency</p>
+        <h1>Agency Lesson Workspace</h1>
+        <form id="setupForm" hidden>
+          <h2>First-time master setup</h2>
+          <label><span>Your name</span><input id="setupName" required></label>
+          <label><span>Email</span><input id="setupEmail" type="email" required></label>
+          <label><span>Password</span><input id="setupPassword" type="password" required></label>
+          <button type="submit">Create Master Account</button>
+          <p id="setupMessage" role="status"></p>
+        </form>
+        <form id="loginForm" hidden>
+          <h2>Sign in</h2>
+          <label><span>Email</span><input id="loginEmail" type="email" required></label>
+          <label><span>Password</span><input id="loginPassword" type="password" required></label>
+          <button type="submit">Sign In</button>
+          <p id="loginMessage" role="status"></p>
+        </form>
+      </section>
+    </main>
+
+    <main id="appShell" class="app-shell" hidden>
+      <aside class="sidebar">
+        <p class="eyebrow">TutorFlow</p>
+        <h1>Agency</h1>
+        <p id="userBadge" class="user-badge"></p>
+        <button id="logoutButton" class="ghost" type="button">Sign Out</button>
+        <nav>
+          <button class="tab active" type="button" data-tab="home">Home</button>
+          <button class="tab master-only" type="button" data-tab="tutors">Tutors</button>
+          <button class="tab" type="button" data-tab="students">Students</button>
+          <button class="tab" type="button" data-tab="calendar">Calendar</button>
+          <button class="tab" type="button" data-tab="timesheet">Timesheet</button>
+          <button class="tab master-only" type="button" data-tab="reports">Reports</button>
+          <button class="tab" type="button" data-tab="settings">Settings</button>
+        </nav>
+      </aside>
+
+      <section class="page active" id="home">
+        <header class="page-head">
+          <div><p class="eyebrow">Today</p><h2>Agency Dashboard</h2></div>
+          <input id="homeMonth" type="month">
+        </header>
+        <section id="homeStats" class="stat-grid"></section>
+        <section class="grid-two">
+          <article class="panel"><h3>Upcoming Lessons</h3><div id="upcomingList" class="list"></div></article>
+          <article class="panel"><h3>Lessons Needing Completion</h3><div id="completionList" class="list"></div></article>
+        </section>
+      </section>
+
+      <section class="page" id="tutors">
+        <header class="page-head"><div><p class="eyebrow">Master</p><h2>Tutor Accounts</h2></div></header>
+        <section class="grid-two">
+          <form id="tutorForm" class="panel">
+            <h3>Add Tutor</h3>
+            <label><span>Name</span><input id="tutorName" required></label>
+            <label><span>Email</span><input id="tutorEmail" type="email" required></label>
+            <label><span>Default hourly rate</span><input id="tutorRate" type="number" min="0" step="0.01"></label>
+            <button type="submit">Create Tutor</button>
+            <p id="tutorMessage" role="status"></p>
+          </form>
+          <article class="panel"><h3>All Tutors</h3><div id="tutorList" class="list"></div></article>
+        </section>
+      </section>
+
+      <section class="page" id="students">
+        <header class="page-head"><div><p class="eyebrow">Students</p><h2>Student Assignment</h2></div></header>
+        <section class="grid-two">
+          <form id="studentForm" class="panel master-only">
+            <h3>Add Student</h3>
+            <label><span>Student name</span><input id="studentName" required></label>
+            <label><span>Parent name</span><input id="parentName"></label>
+            <label><span>Parent email</span><input id="parentEmail" type="email"></label>
+            <label><span>Year group</span><input id="yearGroup"></label>
+            <label><span>Target school / notes</span><input id="targetSchool"></label>
+            <label><span>Hourly rate</span><input id="studentRate" type="number" min="0" step="0.01"></label>
+            <label><span>Assigned tutor</span><select id="assignedTutor"></select></label>
+            <button type="submit">Save Student</button>
+            <p id="studentMessage" role="status"></p>
+          </form>
+          <article class="panel"><h3>Students</h3><div id="studentList" class="list"></div></article>
+        </section>
+      </section>
+
+      <section class="page" id="calendar">
+        <header class="page-head">
+          <div><p class="eyebrow">Bookings</p><h2>Shared Calendar</h2></div>
+          <input id="calendarMonth" type="month">
+        </header>
+        <section class="calendar-workspace">
+          <form id="bookingForm" class="panel booking-panel">
+            <h3>Add Lesson</h3>
+            <label><span>Student</span><select id="bookingStudent" required></select></label>
+            <label class="master-booking-field"><span>Tutor</span><select id="bookingTutor"></select></label>
+            <label><span>Date</span><input id="bookingDate" type="date" required></label>
+            <label><span>Start time</span><input id="bookingTime" type="time" required></label>
+            <label><span>Duration minutes</span><input id="bookingDuration" type="number" min="15" step="15" value="60"></label>
+            <label><span>Repeat</span><select id="bookingRepeat">
+              <option value="1">One-off lesson</option>
+              <option value="4">Weekly for 4 weeks</option>
+              <option value="8">Weekly for 8 weeks</option>
+              <option value="12">Weekly for 12 weeks</option>
+              <option value="24">Weekly for 24 weeks</option>
+            </select></label>
+            <label><span>Booking notes</span><textarea id="bookingNotes" rows="3"></textarea></label>
+            <button type="submit">Add Booking</button>
+            <p id="bookingMessage" role="status"></p>
+          </form>
+          <article class="panel calendar-panel">
+            <div id="calendarGrid" class="calendar-grid"></div>
+          </article>
+          <div id="emailDraftPanel" class="notice" hidden></div>
+        </section>
+      </section>
+
+      <section class="page" id="timesheet">
+        <header class="page-head">
+          <div><p class="eyebrow">Tutor</p><h2>Monthly Timesheet</h2></div>
+          <input id="timesheetMonth" type="month">
+        </header>
+        <section class="panel">
+          <div class="toolbar">
+            <select id="timesheetTutor" class="master-only"></select>
+            <button id="loadTimesheet" type="button">Refresh</button>
+            <button id="downloadTimesheet" type="button">Download CSV</button>
+            <button id="submitTimesheet" type="button">Mark Submitted To Scott</button>
+            <button id="approveTimesheet" class="master-only" type="button">Approve</button>
+            <button id="queryTimesheet" class="master-only" type="button">Query</button>
+          </div>
+          <div id="timesheetSummary" class="notice"></div>
+          <div id="timesheetList" class="list"></div>
+        </section>
+      </section>
+
+      <section class="page" id="reports">
+        <header class="page-head"><div><p class="eyebrow">Oversight</p><h2>Lesson Reports</h2></div></header>
+        <section class="panel">
+          <div class="toolbar">
+            <input id="reportMonth" type="month">
+            <select id="reportTutor"></select>
+            <select id="reportStudent"></select>
+            <button id="loadReports" type="button">Load Report</button>
+            <button id="downloadReports" type="button">Download Notes CSV</button>
+          </div>
+          <div id="reportList" class="list"></div>
+        </section>
+      </section>
+
+      <section class="page" id="settings">
+        <header class="page-head"><div><p class="eyebrow">Account</p><h2>Settings & Backup</h2></div></header>
+        <section class="grid-two">
+          <form id="passwordForm" class="panel">
+            <h3>Change Password</h3>
+            <label><span>Current password</span><input id="currentPassword" type="password" required></label>
+            <label><span>New password</span><input id="newPassword" type="password" required></label>
+            <button type="submit">Update Password</button>
+            <p id="passwordMessage" role="status"></p>
+          </form>
+          <article class="panel master-only">
+            <h3>Agency Backup</h3>
+            <p class="muted-copy">Download a zipped copy of the agency database before a trial or major change.</p>
+            <button id="downloadBackup" type="button">Download Backup</button>
+          </article>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="completeDialog">
+      <form id="completeForm" method="dialog">
+        <h2>Complete Lesson</h2>
+        <p id="completeContext"></p>
+        <input id="completeBookingId" type="hidden">
+        <label><span>Attendance</span><select id="attendanceStatus"><option>Completed</option><option>Student absent</option><option>Tutor absent</option></select></label>
+        <label><span>Parent-facing lesson notes</span><textarea id="parentSummary" rows="6" required></textarea></label>
+        <label class="checkbox-line"><input id="emailParent" type="checkbox" checked> Email notes to parent</label>
+        <div class="dialog-actions">
+          <button class="ghost" value="cancel" type="button" id="cancelComplete">Cancel</button>
+          <button value="default" type="submit">Save Lesson</button>
+        </div>
+        <p id="completeMessage" role="status"></p>
+      </form>
+    </dialog>
+
+    <dialog id="bookingDialog">
+      <form id="bookingEditForm" method="dialog">
+        <h2>Lesson Details</h2>
+        <p id="bookingEditContext"></p>
+        <input id="bookingEditId" type="hidden">
+        <label><span>Student</span><select id="bookingEditStudent" required></select></label>
+        <label class="master-booking-field"><span>Tutor</span><select id="bookingEditTutor"></select></label>
+        <label><span>Date</span><input id="bookingEditDate" type="date" required></label>
+        <label><span>Start time</span><input id="bookingEditTime" type="time" required></label>
+        <label><span>Duration minutes</span><input id="bookingEditDuration" type="number" min="15" step="15" required></label>
+        <label><span>Booking notes</span><textarea id="bookingEditNotes" rows="3"></textarea></label>
+        <div class="dialog-actions split-actions">
+          <button class="ghost" type="button" id="closeBookingDialog">Close</button>
+          <button class="ghost" type="button" id="completeBookingFromDialog">Complete Lesson</button>
+          <button class="warn" type="button" id="cancelBookingButton">Cancel Lesson</button>
+          <button class="danger master-only" type="button" id="deleteBookingButton">Delete</button>
+          <button type="submit">Save Changes</button>
+        </div>
+        <p id="bookingEditMessage" role="status"></p>
+      </form>
+    </dialog>
+
+    <script src="/app.js?v=agency-hardening-2"></script>
+  </body>
+</html>
