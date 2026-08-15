@@ -258,7 +258,11 @@ async function saveTutor(event) {
     method: "POST",
     body: JSON.stringify({ name: els.tutorName.value, email: els.tutorEmail.value, hourly_rate: els.tutorRate.value }),
   });
-  els.tutorMessage.innerHTML = `Tutor created. Temporary password: <strong>${escapeHtml(data.temporary_password)}</strong>`;
+  if (data.email_sent) {
+    els.tutorMessage.textContent = `Tutor created. Login details were emailed to ${data.email}.`;
+  } else {
+    els.tutorMessage.innerHTML = `Tutor created, but the login email was not sent: ${escapeHtml(data.email_error || "Email delivery is unavailable.")} Temporary password: <strong>${escapeHtml(data.temporary_password)}</strong>`;
+  }
   els.tutorForm.reset();
   await refreshBaseData();
   renderTutors();
@@ -301,7 +305,11 @@ async function resetTutorPassword(tutorId) {
   const tutor = tutors.find((item) => Number(item.user_id) === Number(tutorId));
   if (!tutor || !confirm(`Reset password for ${tutor.name}?`)) return;
   const data = await api(`/api/users/${tutorId}/reset-password`, { method: "POST", body: "{}" });
-  alert(`Temporary password for ${tutor.name}: ${data.temporary_password}`);
+  if (data.email_sent) {
+    alert(`Password reset. New login details were emailed to ${data.email}.`);
+  } else {
+    alert(`Password reset, but the email was not sent: ${data.email_error || "Email delivery is unavailable."}\n\nTemporary password for ${tutor.name}: ${data.temporary_password}`);
+  }
 }
 
 async function saveStudent(event) {

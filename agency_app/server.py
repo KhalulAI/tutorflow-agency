@@ -190,20 +190,20 @@ def postmark_configured() -> bool:
     return bool(os.environ.get("POSTMARK_SERVER_TOKEN") and os.environ.get("POSTMARK_FROM_EMAIL"))
 
 
-def send_lesson_email(recipient: str, student_name: str, summary: str, reply_to: str = "") -> str:
+def send_postmark_email(recipient: str, subject: str, body: str, reply_to: str = "") -> str:
     token = os.environ.get("POSTMARK_SERVER_TOKEN", "").strip()
     from_email = os.environ.get("POSTMARK_FROM_EMAIL", "").strip()
     from_name = os.environ.get("POSTMARK_FROM_NAME", "TutorFlow Agency").strip()
     if not token or not from_email:
         raise RuntimeError("Postmark is not configured. Set POSTMARK_SERVER_TOKEN and POSTMARK_FROM_EMAIL.")
     if not recipient:
-        raise ValueError("The student does not have a parent email address.")
+        raise ValueError("A recipient email address is required.")
 
     message = {
         "From": f"{from_name} <{from_email}>" if from_name else from_email,
         "To": recipient,
-        "Subject": f"Lesson notes for {student_name}",
-        "TextBody": summary,
+        "Subject": subject,
+        "TextBody": body,
         "MessageStream": os.environ.get("POSTMARK_MESSAGE_STREAM", "outbound"),
     }
     if reply_to:
@@ -234,6 +234,48 @@ def send_lesson_email(recipient: str, student_name: str, summary: str, reply_to:
     if result.get("ErrorCode"):
         raise RuntimeError(f"Postmark rejected the email: {result.get('Message', 'Unknown error')}")
     return result.get("MessageID", "")
+
+
+def send_lesson_email(recipient: str, student_name: str, summary: str, reply_to: str = "") -> str:
+    if not recipient:
+        raise ValueError("The student does not have a parent email address.")
+    return send_postmark_email(
+        recipient,
+        f"Lesson notes for {student_name}",
+        summary,
+        reply_to,
+    )
+
+
+def app_url() -> str:
+    configured = os.environ.get("APP_BASE_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+    railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    return f"https://{railway_domain}" if railway_domain else "the TutorFlow Agency website"
+
+
+def send_tutor_credentials_email(
+    recipient: str,
+    tutor_name: str,
+    temporary_password: str,
+    reply_to: str = "",
+    reset: bool = False,
+) -> str:
+    action = "reset" if reset else "created"
+    subject = "Your TutorFlow Agency password was reset" if reset else "Your TutorFlow Agency account"
+    body = f"""Hello {tutor_name},
+
+Your TutorFlow Agency account has been {action}.
+
+Sign in: {app_url()}
+Email: {recipient}
+Temporary password: {temporary_password}
+
+Please sign in and change this temporary password from Settings as soon as possible.
+If you were not expecting this email, contact your agency administrator.
+"""
+    return send_postmark_email(recipient, subject, body, reply_to)
 
 
 def query_period(query):
@@ -564,15 +606,36 @@ class Handler(SimpleHTTPRequestHandler):
             if not self.require_master():
                 return
             temp_password = payload.get("password") or f"Tutor-{secrets.token_urlsafe(5)}"
+            tutor_email = payload["email"].strip().lower()
             with db() as conn:
                 conn.execute(
                     """
                     INSERT INTO users (name, email, password_hash, role, hourly_rate, active, created_at)
                     VALUES (?, ?, ?, 'Tutor', ?, 1, ?)
                     """,
-                    (payload["name"], payload["email"].lower(), hash_password(temp_password), float(payload.get("hourly_rate") or 0), now_iso()),
+                    (payload["name"], tutor_email, hash_password(temp_password), float(payload.get("hourly_rate") or 0), now_iso()),
                 )
-            return self.send_json({"ok": True, "temporary_password": temp_password})
+            email_sent = False
+            email_error = ""
+            try:
+                send_tutor_credentials_email(
+                    tutor_email,
+                    payload["name"],
+                    temp_password,
+                    user.get("email", ""),
+                )
+                email_sent = True
+            except (RuntimeError, ValueError) as error:
+                email_error = str(error)
+            return self.send_json(
+                {
+                    "ok": True,
+                    "temporary_password": temp_password,
+                    "email": tutor_email,
+                    "email_sent": email_sent,
+                    "email_error": email_error,
+                }
+            )
 
         if path.startswith("/api/users/") and path.endswith("/reset-password"):
             if not self.require_master():
@@ -580,8 +643,35 @@ class Handler(SimpleHTTPRequestHandler):
             tutor_id = int(path.split("/")[3])
             temp_password = f"Tutor-{secrets.token_urlsafe(5)}"
             with db() as conn:
+                tutor = conn.execute(
+                    "SELECT name, email FROM users WHERE user_id = ? AND role = 'Tutor'",
+                    (tutor_id,),
+                ).fetchone()
+                if not tutor:
+                    return self.send_json({"error": "Tutor not found."}, 404)
                 conn.execute("UPDATE users SET password_hash = ? WHERE user_id = ? AND role = 'Tutor'", (hash_password(temp_password), tutor_id))
-            return self.send_json({"ok": True, "temporary_password": temp_password})
+            email_sent = False
+            email_error = ""
+            try:
+                send_tutor_credentials_email(
+                    tutor["email"],
+                    tutor["name"],
+                    temp_password,
+                    user.get("email", ""),
+                    reset=True,
+                )
+                email_sent = True
+            except (RuntimeError, ValueError) as error:
+                email_error = str(error)
+            return self.send_json(
+                {
+                    "ok": True,
+                    "temporary_password": temp_password,
+                    "email": tutor["email"],
+                    "email_sent": email_sent,
+                    "email_error": email_error,
+                }
+            )
 
         if path.startswith("/api/users/") and path.endswith("/update"):
             if not self.require_master():

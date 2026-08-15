@@ -17,6 +17,7 @@ class AgencyApiTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.original_db_path = server.DB_PATH
         self.original_send_email = server.send_lesson_email
+        self.original_send_credentials = server.send_tutor_credentials_email
         server.DB_PATH = Path(self.temp_dir.name) / "agency.sqlite3"
         server.init_db()
         self.httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
@@ -31,6 +32,7 @@ class AgencyApiTests(unittest.TestCase):
         self.thread.join(timeout=2)
         server.DB_PATH = self.original_db_path
         server.send_lesson_email = self.original_send_email
+        server.send_tutor_credentials_email = self.original_send_credentials
         self.temp_dir.cleanup()
 
     def api(self, path, method="GET", body=None):
@@ -118,6 +120,39 @@ class AgencyApiTests(unittest.TestCase):
                 "SELECT emailed_to_parent FROM lesson_records WHERE booking_id = ?", (booking_id,)
             ).fetchone()
         self.assertEqual(lesson["emailed_to_parent"], 1)
+
+    def test_tutor_creation_and_password_reset_send_credentials(self):
+        self.login_as_master()
+        calls = []
+
+        def fake_send(recipient, tutor_name, temporary_password, reply_to="", reset=False):
+            calls.append(
+                {
+                    "recipient": recipient,
+                    "tutor_name": tutor_name,
+                    "temporary_password": temporary_password,
+                    "reply_to": reply_to,
+                    "reset": reset,
+                }
+            )
+            return "credentials-message-id"
+
+        server.send_tutor_credentials_email = fake_send
+        _, created = self.api(
+            "/api/users",
+            "POST",
+            {"name": "Test Tutor", "email": "tutor@example.com", "hourly_rate": 40},
+        )
+        self.assertTrue(created["email_sent"])
+        self.assertEqual(calls[0]["recipient"], "tutor@example.com")
+        self.assertFalse(calls[0]["reset"])
+
+        _, users = self.api("/api/users")
+        tutor = next(item for item in users["users"] if item["role"] == "Tutor")
+        _, reset = self.api(f"/api/users/{tutor['user_id']}/reset-password", "POST", {})
+        self.assertTrue(reset["email_sent"])
+        self.assertTrue(calls[1]["reset"])
+        self.assertNotEqual(calls[0]["temporary_password"], calls[1]["temporary_password"])
 
 
 class PostmarkTests(unittest.TestCase):
