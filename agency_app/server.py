@@ -462,10 +462,12 @@ class Handler(SimpleHTTPRequestHandler):
             with db() as conn:
                 bookings = rows(conn.execute(
                     f"""
-                    SELECT b.*, s.student_name, s.parent_email, u.name AS tutor_name
+                    SELECT b.*, s.student_name, s.parent_email, u.name AS tutor_name,
+                           lr.parent_summary, lr.attendance_status, lr.emailed_to_parent
                     FROM bookings b
                     JOIN students s ON s.student_id = b.student_id
                     JOIN users u ON u.user_id = b.tutor_id
+                    LEFT JOIN lesson_records lr ON lr.booking_id = b.booking_id
                     WHERE b.start_at >= ? AND b.start_at < ? {where}
                     ORDER BY b.start_at
                     """,
@@ -681,18 +683,66 @@ class Handler(SimpleHTTPRequestHandler):
                 conn.execute(
                     """
                     UPDATE users
-                    SET name = ?, email = ?, hourly_rate = ?, active = ?
+                    SET name = ?, email = ?, hourly_rate = ?
                     WHERE user_id = ? AND role = 'Tutor'
                     """,
                     (
                         payload["name"],
                         payload["email"].lower(),
                         float(payload.get("hourly_rate") or 0),
-                        1 if payload.get("active", True) else 0,
                         tutor_id,
                     ),
                 )
             return self.send_json({"ok": True})
+
+        if path.startswith("/api/users/") and path.endswith("/status"):
+            if not self.require_master():
+                return
+            tutor_id = int(path.split("/")[3])
+            active = 1 if payload.get("active") else 0
+            with db() as conn:
+                tutor = conn.execute(
+                    "SELECT user_id FROM users WHERE user_id = ? AND role = 'Tutor'",
+                    (tutor_id,),
+                ).fetchone()
+                if not tutor:
+                    return self.send_json({"error": "Tutor not found."}, 404)
+                conn.execute("UPDATE users SET active = ? WHERE user_id = ?", (active, tutor_id))
+                if not active:
+                    conn.execute("DELETE FROM sessions WHERE user_id = ?", (tutor_id,))
+            return self.send_json({"ok": True, "active": bool(active)})
+
+        if path.startswith("/api/users/") and path.endswith("/delete"):
+            if not self.require_master():
+                return
+            tutor_id = int(path.split("/")[3])
+            with db() as conn:
+                tutor = conn.execute(
+                    "SELECT name FROM users WHERE user_id = ? AND role = 'Tutor'",
+                    (tutor_id,),
+                ).fetchone()
+                if not tutor:
+                    return self.send_json({"error": "Tutor not found."}, 404)
+                usage = conn.execute(
+                    """
+                    SELECT
+                      (SELECT COUNT(*) FROM bookings WHERE tutor_id = ?) AS booking_count,
+                      (SELECT COUNT(*) FROM lesson_records WHERE tutor_id = ?) AS lesson_count,
+                      (SELECT COUNT(*) FROM students WHERE assigned_tutor_id = ?) AS student_count
+                    """,
+                    (tutor_id, tutor_id, tutor_id),
+                ).fetchone()
+                if usage["booking_count"] or usage["lesson_count"]:
+                    return self.send_json(
+                        {
+                            "error": "This tutor has booking or lesson history and cannot be removed. Make the account inactive instead."
+                        },
+                        409,
+                    )
+                conn.execute("DELETE FROM users WHERE user_id = ?", (tutor_id,))
+            return self.send_json(
+                {"ok": True, "unassigned_students": usage["student_count"]}
+            )
 
         if path == "/api/students":
             if not self.require_master():
@@ -761,6 +811,12 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"error": "Choose one-off, 4, 8, 12, or 24 weeks."}, 400)
             start = datetime.fromisoformat(payload["start_at"])
             with db() as conn:
+                tutor = conn.execute(
+                    "SELECT user_id FROM users WHERE user_id = ? AND role IN ('Master', 'Tutor') AND active = 1",
+                    (tutor_id,),
+                ).fetchone()
+                if not tutor:
+                    return self.send_json({"error": "Choose an active tutor for this booking."}, 400)
                 for week in range(max(1, repeat)):
                     item_start = start + timedelta(days=7 * week)
                     conn.execute(
@@ -858,6 +914,12 @@ class Handler(SimpleHTTPRequestHandler):
                 tutor_id = int(payload.get("tutor_id") or booking["tutor_id"])
                 if user["role"] != "Master" and tutor_id != user["user_id"]:
                     return self.send_json({"error": "Tutors can only keep lessons assigned to themselves."}, 403)
+                tutor = conn.execute(
+                    "SELECT user_id FROM users WHERE user_id = ? AND role IN ('Master', 'Tutor') AND active = 1",
+                    (tutor_id,),
+                ).fetchone()
+                if not tutor:
+                    return self.send_json({"error": "Choose an active tutor for this booking."}, 400)
                 conn.execute(
                     """
                     UPDATE bookings

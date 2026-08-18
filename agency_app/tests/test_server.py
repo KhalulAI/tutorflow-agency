@@ -6,6 +6,7 @@ import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 from unittest.mock import patch
 
@@ -120,6 +121,10 @@ class AgencyApiTests(unittest.TestCase):
                 "SELECT emailed_to_parent FROM lesson_records WHERE booking_id = ?", (booking_id,)
             ).fetchone()
         self.assertEqual(lesson["emailed_to_parent"], 1)
+        _, updated_bookings = self.api(f"/api/bookings?month={start_at[:7]}")
+        updated = updated_bookings["bookings"][0]
+        self.assertEqual(updated["parent_summary"], "Excellent progress today.")
+        self.assertEqual(updated["attendance_status"], "Completed")
 
     def test_tutor_creation_and_password_reset_send_credentials(self):
         self.login_as_master()
@@ -153,6 +158,62 @@ class AgencyApiTests(unittest.TestCase):
         self.assertTrue(reset["email_sent"])
         self.assertTrue(calls[1]["reset"])
         self.assertNotEqual(calls[0]["temporary_password"], calls[1]["temporary_password"])
+
+        _, inactive = self.api(
+            f"/api/users/{tutor['user_id']}/status", "POST", {"active": False}
+        )
+        self.assertFalse(inactive["active"])
+        _, active = self.api(
+            f"/api/users/{tutor['user_id']}/status", "POST", {"active": True}
+        )
+        self.assertTrue(active["active"])
+
+        self.api(
+            "/api/students",
+            "POST",
+            {
+                "student_name": "Assigned Student",
+                "parent_name": "Parent",
+                "parent_email": "parent@example.com",
+                "assigned_tutor_id": tutor["user_id"],
+            },
+        )
+        _, removed = self.api(f"/api/users/{tutor['user_id']}/delete", "POST", {})
+        self.assertEqual(removed["unassigned_students"], 1)
+        _, students = self.api("/api/students")
+        self.assertIsNone(students["students"][0]["assigned_tutor_id"])
+
+    def test_tutor_with_booking_history_cannot_be_removed(self):
+        self.login_as_master()
+        self.api(
+            "/api/users",
+            "POST",
+            {"name": "Historic Tutor", "email": "historic@example.com", "hourly_rate": 45},
+        )
+        _, users = self.api("/api/users")
+        tutor = next(item for item in users["users"] if item["role"] == "Tutor")
+        self.api(
+            "/api/students",
+            "POST",
+            {"student_name": "Historic Student", "assigned_tutor_id": tutor["user_id"]},
+        )
+        _, students = self.api("/api/students")
+        start_at = datetime.now().replace(day=16, hour=16, minute=0, second=0, microsecond=0).isoformat()
+        self.api(
+            "/api/bookings",
+            "POST",
+            {
+                "student_id": students["students"][0]["student_id"],
+                "tutor_id": tutor["user_id"],
+                "start_at": start_at,
+                "duration_minutes": 60,
+            },
+        )
+        with self.assertRaises(HTTPError) as raised:
+            self.api(f"/api/users/{tutor['user_id']}/delete", "POST", {})
+        self.assertEqual(raised.exception.code, 409)
+        error = json.loads(raised.exception.read().decode("utf-8"))
+        self.assertIn("cannot be removed", error["error"])
 
 
 class PostmarkTests(unittest.TestCase):

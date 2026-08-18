@@ -57,6 +57,7 @@ const els = {
   emailParent: $("#emailParent"),
   completeMessage: $("#completeMessage"),
   cancelComplete: $("#cancelComplete"),
+  closeCompleteDialogX: $("#closeCompleteDialogX"),
   timesheetMonth: $("#timesheetMonth"),
   timesheetTutor: $("#timesheetTutor"),
   loadTimesheet: $("#loadTimesheet"),
@@ -90,6 +91,7 @@ const els = {
   bookingEditNotes: $("#bookingEditNotes"),
   bookingEditMessage: $("#bookingEditMessage"),
   closeBookingDialog: $("#closeBookingDialog"),
+  closeBookingDialogX: $("#closeBookingDialogX"),
   completeBookingFromDialog: $("#completeBookingFromDialog"),
   cancelBookingButton: $("#cancelBookingButton"),
   deleteBookingButton: $("#deleteBookingButton"),
@@ -204,7 +206,8 @@ async function refreshBaseData() {
 }
 
 function renderSelects() {
-  const tutorOptions = `<option value="">Choose tutor</option>` + tutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
+  const activeTutors = tutors.filter((tutor) => tutor.active);
+  const tutorOptions = `<option value="">Choose tutor</option>` + activeTutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
   els.assignedTutor.innerHTML = tutorOptions;
   els.bookingTutor.innerHTML = tutorOptions;
   els.timesheetTutor.innerHTML = tutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
@@ -276,11 +279,15 @@ function renderTutors() {
       <div class="button-row">
         <button type="button" data-edit-tutor="${tutor.user_id}">Edit</button>
         <button class="ghost dark-ghost" type="button" data-reset-tutor="${tutor.user_id}">Reset Password</button>
+        <button class="${tutor.active ? "warn" : ""}" type="button" data-status-tutor="${tutor.user_id}">${tutor.active ? "Make Inactive" : "Reactivate"}</button>
+        <button class="danger" type="button" data-remove-tutor="${tutor.user_id}">Remove</button>
       </div>
     </article>
   `).join("") : `<div class="notice">No tutor accounts yet.</div>`;
   $$("[data-edit-tutor]").forEach((button) => button.addEventListener("click", () => editTutor(Number(button.dataset.editTutor))));
   $$("[data-reset-tutor]").forEach((button) => button.addEventListener("click", () => resetTutorPassword(Number(button.dataset.resetTutor))));
+  $$("[data-status-tutor]").forEach((button) => button.addEventListener("click", () => changeTutorStatus(Number(button.dataset.statusTutor))));
+  $$("[data-remove-tutor]").forEach((button) => button.addEventListener("click", () => removeTutor(Number(button.dataset.removeTutor))));
 }
 
 async function editTutor(tutorId) {
@@ -292,10 +299,9 @@ async function editTutor(tutorId) {
   if (email === null) return;
   const hourlyRate = prompt("Default hourly rate", tutor.hourly_rate ?? 0);
   if (hourlyRate === null) return;
-  const active = confirm("Should this tutor account be active?");
   await api(`/api/users/${tutorId}/update`, {
     method: "POST",
-    body: JSON.stringify({ name, email, hourly_rate: hourlyRate, active }),
+    body: JSON.stringify({ name, email, hourly_rate: hourlyRate }),
   });
   await refreshBaseData();
   renderTutors();
@@ -309,6 +315,35 @@ async function resetTutorPassword(tutorId) {
     alert(`Password reset. New login details were emailed to ${data.email}.`);
   } else {
     alert(`Password reset, but the email was not sent: ${data.email_error || "Email delivery is unavailable."}\n\nTemporary password for ${tutor.name}: ${data.temporary_password}`);
+  }
+}
+
+async function changeTutorStatus(tutorId) {
+  const tutor = tutors.find((item) => Number(item.user_id) === Number(tutorId));
+  if (!tutor) return;
+  const nextActive = !tutor.active;
+  const action = nextActive ? "reactivate" : "make inactive";
+  if (!confirm(`Are you sure you want to ${action} ${tutor.name}?`)) return;
+  await api(`/api/users/${tutorId}/status`, {
+    method: "POST",
+    body: JSON.stringify({ active: nextActive }),
+  });
+  await refreshBaseData();
+  renderTutors();
+}
+
+async function removeTutor(tutorId) {
+  const tutor = tutors.find((item) => Number(item.user_id) === Number(tutorId));
+  if (!tutor) return;
+  if (!confirm(`Permanently remove ${tutor.name}? Any assigned students will become unassigned. This cannot be undone.`)) return;
+  try {
+    const data = await api(`/api/users/${tutorId}/delete`, { method: "POST", body: "{}" });
+    const suffix = data.unassigned_students ? ` ${data.unassigned_students} student(s) were unassigned.` : "";
+    alert(`Tutor removed.${suffix}`);
+    await refreshBaseData();
+    renderTutors();
+  } catch (error) {
+    alert(error.message);
   }
 }
 
@@ -424,6 +459,7 @@ function openBookingDialog(bookingId) {
   els.bookingEditTime.value = timePart(booking.start_at);
   els.bookingEditDuration.value = booking.duration_minutes || 60;
   els.bookingEditNotes.value = booking.notes || "";
+  els.completeBookingFromDialog.textContent = booking.status === "Completed" ? "View/Edit Lesson Notes" : "Complete & Add Notes";
   els.bookingEditMessage.textContent = "";
   els.bookingDialog.showModal();
 }
@@ -487,7 +523,9 @@ function openCompleteDialog(bookingId) {
   if (!booking) return;
   els.completeBookingId.value = booking.booking_id;
   els.completeContext.textContent = `${booking.student_name} with ${booking.tutor_name} / ${formatDateTime(booking.start_at)}`;
-  els.parentSummary.value = "";
+  els.attendanceStatus.value = booking.attendance_status || "Completed";
+  els.parentSummary.value = booking.parent_summary || "";
+  els.emailParent.checked = booking.status !== "Completed";
   els.completeMessage.textContent = "";
   els.completeDialog.showModal();
 }
@@ -651,6 +689,7 @@ els.studentForm.addEventListener("submit", saveStudent);
 els.bookingForm.addEventListener("submit", saveBooking);
 els.bookingEditForm.addEventListener("submit", saveBookingEdit);
 els.closeBookingDialog.addEventListener("click", () => els.bookingDialog.close());
+els.closeBookingDialogX.addEventListener("click", () => els.bookingDialog.close());
 els.completeBookingFromDialog.addEventListener("click", () => {
   const bookingId = Number(els.bookingEditId.value);
   els.bookingDialog.close();
@@ -662,6 +701,7 @@ els.calendarMonth.addEventListener("change", loadCalendar);
 els.homeMonth.addEventListener("change", loadHome);
 els.completeForm.addEventListener("submit", completeLesson);
 els.cancelComplete.addEventListener("click", () => els.completeDialog.close());
+els.closeCompleteDialogX.addEventListener("click", () => els.completeDialog.close());
 els.loadTimesheet.addEventListener("click", loadTimesheet);
 els.timesheetMonth.addEventListener("change", loadTimesheet);
 els.timesheetTutor.addEventListener("change", loadTimesheet);

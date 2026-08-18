@@ -177,15 +177,22 @@
 
     <dialog id="completeDialog">
       <form id="completeForm" method="dialog">
-        <h2>Complete Lesson</h2>
+        <div class="dialog-header">
+          <h2>Complete Lesson &amp; Add Notes</h2>
+          <button class="dialog-close" type="button" id="closeCompleteDialogX" aria-label="Close" title="Close">&times;</button>
+        </div>
         <p id="completeContext"></p>
         <input id="completeBookingId" type="hidden">
         <label><span>Attendance</span><select id="attendanceStatus"><option>Completed</option><option>Student absent</option><option>Tutor absent</option></select></label>
-        <label><span>Parent-facing lesson notes</span><textarea id="parentSummary" rows="6" required></textarea></label>
+        <label>
+          <span>Lesson notes for parent</span>
+          <textarea id="parentSummary" rows="6" required placeholder="Write a clear summary of the lesson, progress and next steps..."></textarea>
+          <small>These notes are saved in the student's lesson record and emailed to the parent when the box below is checked.</small>
+        </label>
         <label class="checkbox-line"><input id="emailParent" type="checkbox" checked> Email notes to parent</label>
         <div class="dialog-actions">
-          <button class="ghost" value="cancel" type="button" id="cancelComplete">Cancel</button>
-          <button value="default" type="submit">Save Lesson</button>
+          <button class="ghost dark-ghost" value="cancel" type="button" id="cancelComplete">Close Without Saving</button>
+          <button value="default" type="submit">Save Lesson &amp; Notes</button>
         </div>
         <p id="completeMessage" role="status"></p>
       </form>
@@ -193,7 +200,10 @@
 
     <dialog id="bookingDialog">
       <form id="bookingEditForm" method="dialog">
-        <h2>Lesson Details</h2>
+        <div class="dialog-header">
+          <h2>Lesson Details</h2>
+          <button class="dialog-close" type="button" id="closeBookingDialogX" aria-label="Close" title="Close">&times;</button>
+        </div>
         <p id="bookingEditContext"></p>
         <input id="bookingEditId" type="hidden">
         <label><span>Student</span><select id="bookingEditStudent" required></select></label>
@@ -203,8 +213,8 @@
         <label><span>Duration minutes</span><input id="bookingEditDuration" type="number" min="15" step="15" required></label>
         <label><span>Booking notes</span><textarea id="bookingEditNotes" rows="3"></textarea></label>
         <div class="dialog-actions split-actions">
-          <button class="ghost" type="button" id="closeBookingDialog">Close</button>
-          <button class="ghost" type="button" id="completeBookingFromDialog">Complete Lesson</button>
+          <button class="ghost dark-ghost" type="button" id="closeBookingDialog">Close</button>
+          <button type="button" id="completeBookingFromDialog">Complete &amp; Add Notes</button>
           <button class="warn" type="button" id="cancelBookingButton">Cancel Lesson</button>
           <button class="danger master-only" type="button" id="deleteBookingButton">Delete</button>
           <button type="submit">Save Changes</button>
@@ -213,6 +223,6 @@
       </form>
     </dialog>
 
-    <script src="/app.js?v=agency-hardening-2"></script>
+    <script src="/app.js?v=agency-hardening-3"></script>
   </body>
 </html>

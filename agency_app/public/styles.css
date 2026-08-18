@@ -76,6 +76,13 @@ label span, .eyebrow {
   text-transform: uppercase;
 }
 
+label small {
+  color: var(--muted);
+  font-size: .8rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
 input, select, textarea {
   width: 100%;
   border: 1px solid var(--line);
@@ -377,6 +384,31 @@ dialog form {
   display: grid;
   gap: 14px;
   padding: 20px;
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.dialog-close {
+  min-width: 42px;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: #fff;
+  color: var(--green);
+  padding: 0;
+  font-size: 1.8rem;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.dialog-close:hover {
+  background: var(--soft);
+  color: var(--ink);
 }
 
 .checkbox-line {
