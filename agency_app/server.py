@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import sqlite3
 import time
@@ -239,10 +240,19 @@ def send_postmark_email(recipient: str, subject: str, body: str, reply_to: str =
 def send_lesson_email(recipient: str, student_name: str, summary: str, reply_to: str = "") -> str:
     if not recipient:
         raise ValueError("The student does not have a parent email address.")
+    body = f"""LESSON NOTES
+
+Student: {student_name}
+
+{summary}
+
+Kind regards,
+SWL Education Ltd
+"""
     return send_postmark_email(
         recipient,
-        f"Lesson notes for {student_name}",
-        summary,
+        f"Lesson Notes - {student_name}",
+        body,
         reply_to,
     )
 
@@ -293,6 +303,276 @@ def query_period(query):
     start_dt = datetime(today.year, today.month, 1)
     end_dt = datetime(today.year + (today.month == 12), 1 if today.month == 12 else today.month + 1, 1)
     return start_dt.isoformat(), end_dt.isoformat()
+
+
+def build_timesheet_pdf(lessons, tutor, month: str) -> bytes:
+    """Build the official SWL Education Ltd tutor timesheet."""
+    from xml.sax.saxutils import escape
+
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    deep_green = colors.HexColor("#123F42")
+    teal = colors.HexColor("#16877C")
+    gold = colors.HexColor("#D8B164")
+    paper = colors.HexColor("#FBF7EF")
+    ink = colors.HexColor("#203238")
+    muted = colors.HexColor("#617278")
+    line = colors.HexColor("#D8DED9")
+
+    try:
+        period_label = datetime.strptime(month, "%Y-%m").strftime("%B %Y")
+    except (TypeError, ValueError):
+        period_label = str(month or "Selected period")
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "TimesheetTitle",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=20,
+        leading=23,
+        textColor=deep_green,
+        spaceAfter=2 * mm,
+    )
+    company_style = ParagraphStyle(
+        "Company",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=9,
+        leading=11,
+        textColor=teal,
+        spaceAfter=1 * mm,
+    )
+    meta_label = ParagraphStyle(
+        "MetaLabel",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=7,
+        leading=9,
+        textColor=muted,
+        spaceAfter=1,
+    )
+    meta_value = ParagraphStyle(
+        "MetaValue",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=10,
+        leading=12,
+        textColor=ink,
+    )
+    cell_style = ParagraphStyle(
+        "Cell",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8,
+        leading=10,
+        textColor=ink,
+    )
+    cell_right = ParagraphStyle("CellRight", parent=cell_style, alignment=TA_RIGHT)
+    cell_center = ParagraphStyle("CellCenter", parent=cell_style, alignment=TA_CENTER)
+    header_style = ParagraphStyle(
+        "TableHeader",
+        parent=cell_style,
+        fontName="Helvetica-Bold",
+        fontSize=7.2,
+        leading=9,
+        textColor=colors.white,
+        alignment=TA_CENTER,
+    )
+    small_style = ParagraphStyle(
+        "Small",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7.5,
+        leading=10,
+        textColor=muted,
+    )
+
+    output = BytesIO()
+    document = SimpleDocTemplate(
+        output,
+        pagesize=landscape(A4),
+        leftMargin=15 * mm,
+        rightMargin=15 * mm,
+        topMargin=13 * mm,
+        bottomMargin=15 * mm,
+        title=f"SWL Education Ltd - {period_label} Tutor Timesheet",
+        author="SWL Education Ltd",
+        subject="Monthly tutor timesheet",
+    )
+
+    def add_footer(canvas, doc):
+        canvas.saveState()
+        width, _height = landscape(A4)
+        canvas.setStrokeColor(line)
+        canvas.line(doc.leftMargin, 10 * mm, width - doc.rightMargin, 10 * mm)
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(muted)
+        canvas.drawString(doc.leftMargin, 6.5 * mm, "SWL Education Ltd | Tutor timesheet")
+        canvas.drawRightString(width - doc.rightMargin, 6.5 * mm, f"Page {doc.page}")
+        canvas.restoreState()
+
+    story = [
+        Table(
+            [[
+                Paragraph("SWL EDUCATION LTD", company_style),
+                Paragraph("OFFICIAL TUTOR RECORD", ParagraphStyle("Record", parent=company_style, alignment=TA_RIGHT, textColor=gold)),
+            ]],
+            colWidths=[125 * mm, 132 * mm],
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (-1, -1), paper),
+                ("LINEBELOW", (0, 0), (-1, -1), 2.5, gold),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4 * mm),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4 * mm),
+                ("TOPPADDING", (0, 0), (-1, -1), 3 * mm),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3 * mm),
+            ]),
+        ),
+        Spacer(1, 6 * mm),
+        Paragraph("Monthly Tutor Timesheet", title_style),
+        Spacer(1, 2 * mm),
+    ]
+
+    tutor_name = escape(str(tutor.get("name") or "Tutor"))
+    tutor_email = escape(str(tutor.get("email") or ""))
+    prepared = datetime.now().strftime("%d %B %Y")
+    metadata = Table(
+        [[
+            Paragraph("TUTOR", meta_label),
+            Paragraph("EMAIL", meta_label),
+            Paragraph("PERIOD", meta_label),
+            Paragraph("PREPARED", meta_label),
+        ], [
+            Paragraph(tutor_name, meta_value),
+            Paragraph(tutor_email, meta_value),
+            Paragraph(escape(period_label), meta_value),
+            Paragraph(prepared, meta_value),
+        ]],
+        colWidths=[64 * mm, 82 * mm, 58 * mm, 53 * mm],
+        style=TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), paper),
+            ("BOX", (0, 0), (-1, -1), 0.7, line),
+            ("INNERGRID", (0, 0), (-1, -1), 0.4, line),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3 * mm),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3 * mm),
+            ("TOPPADDING", (0, 0), (-1, 0), 2.5 * mm),
+            ("BOTTOMPADDING", (0, 0), (-1, 0), 0),
+            ("TOPPADDING", (0, 1), (-1, 1), 0),
+            ("BOTTOMPADDING", (0, 1), (-1, 1), 3 * mm),
+        ]),
+    )
+    story.extend([metadata, Spacer(1, 6 * mm)])
+
+    table_rows = [[
+        Paragraph("DATE", header_style),
+        Paragraph("STUDENT", header_style),
+        Paragraph("DURATION", header_style),
+        Paragraph("HOURLY FEE", header_style),
+        Paragraph("AMOUNT", header_style),
+        Paragraph("ATTENDANCE", header_style),
+        Paragraph("TIMESHEET STATUS", header_style),
+    ]]
+    total_minutes = 0
+    total_amount = 0.0
+    for lesson in lessons:
+        minutes = int(lesson.get("duration_minutes") or 0)
+        rate = float(lesson.get("tutor_rate") or 0)
+        amount = (minutes / 60) * rate
+        total_minutes += minutes
+        total_amount += amount
+        raw_date = lesson.get("start_at") or lesson.get("completed_at") or ""
+        try:
+            lesson_date = datetime.fromisoformat(str(raw_date).replace("Z", "+00:00")).strftime("%d %b %Y")
+        except ValueError:
+            lesson_date = str(raw_date)[:10]
+        timesheet_status = lesson.get("timesheet_status") or ("Submitted" if lesson.get("timesheet_submitted") else "Draft")
+        table_rows.append([
+            Paragraph(escape(lesson_date), cell_center),
+            Paragraph(escape(str(lesson.get("student_name") or "")), cell_style),
+            Paragraph(f"{minutes} min", cell_center),
+            Paragraph(f"GBP {rate:,.2f}", cell_right),
+            Paragraph(f"GBP {amount:,.2f}", cell_right),
+            Paragraph(escape(str(lesson.get("attendance_status") or "Completed")), cell_center),
+            Paragraph(escape(str(timesheet_status)), cell_center),
+        ])
+
+    if lessons:
+        table_rows.append([
+            Paragraph("TOTAL", ParagraphStyle("TotalLabel", parent=header_style, alignment=TA_RIGHT)),
+            "",
+            Paragraph(f"{total_minutes / 60:.2f} hours", ParagraphStyle("TotalHours", parent=header_style, alignment=TA_CENTER)),
+            "",
+            Paragraph(f"GBP {total_amount:,.2f}", ParagraphStyle("TotalAmount", parent=header_style, alignment=TA_RIGHT)),
+            "",
+            "",
+        ])
+    else:
+        table_rows.append([Paragraph("No completed lessons recorded for this period.", cell_style), "", "", "", "", "", ""])
+
+    lesson_table = Table(
+        table_rows,
+        colWidths=[27 * mm, 57 * mm, 27 * mm, 31 * mm, 31 * mm, 39 * mm, 45 * mm],
+        repeatRows=1,
+        style=TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), deep_green),
+            ("GRID", (0, 0), (-1, -2 if lessons else -1), 0.45, line),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2.2 * mm),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2.2 * mm),
+            ("TOPPADDING", (0, 0), (-1, -1), 2.2 * mm),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2.2 * mm),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -2 if lessons else -1), [colors.white, paper]),
+            ("SPAN", (0, -1), (1, -1)) if lessons else ("SPAN", (0, 1), (-1, 1)),
+            ("BACKGROUND", (0, -1), (-1, -1), teal if lessons else paper),
+            ("TEXTCOLOR", (0, -1), (-1, -1), colors.white if lessons else ink),
+            ("LINEABOVE", (0, -1), (-1, -1), 1, gold if lessons else line),
+        ]),
+    )
+    story.extend([lesson_table, Spacer(1, 6 * mm)])
+
+    summary = Table(
+        [[
+            Paragraph(f"<b>{len(lessons)}</b><br/><font size='7'>LESSONS</font>", ParagraphStyle("Summary", parent=meta_value, alignment=TA_CENTER)),
+            Paragraph(f"<b>{total_minutes / 60:.2f}</b><br/><font size='7'>TOTAL HOURS</font>", ParagraphStyle("Summary2", parent=meta_value, alignment=TA_CENTER)),
+            Paragraph(f"<b>GBP {total_amount:,.2f}</b><br/><font size='7'>TOTAL PAYABLE</font>", ParagraphStyle("Summary3", parent=meta_value, alignment=TA_CENTER)),
+            Paragraph("I confirm that the lessons listed above are a true and accurate record.", small_style),
+        ]],
+        colWidths=[38 * mm, 45 * mm, 52 * mm, 122 * mm],
+        style=TableStyle([
+            ("BOX", (0, 0), (-1, -1), 0.7, line),
+            ("INNERGRID", (0, 0), (-1, -1), 0.4, line),
+            ("BACKGROUND", (0, 0), (2, 0), paper),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3 * mm),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3 * mm),
+            ("TOPPADDING", (0, 0), (-1, -1), 3 * mm),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3 * mm),
+        ]),
+    )
+    story.extend([summary, Spacer(1, 8 * mm)])
+
+    signatures = Table(
+        [[
+            Paragraph("Tutor signature: ____________________________________", small_style),
+            Paragraph("Approved by: ____________________________________", small_style),
+            Paragraph("Date: ____________________", small_style),
+        ]],
+        colWidths=[96 * mm, 96 * mm, 65 * mm],
+        style=TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3 * mm),
+        ]),
+    )
+    story.append(signatures)
+    document.build(story, onFirstPage=add_footer, onLaterPages=add_footer)
+    return output.getvalue()
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -521,8 +801,14 @@ class Handler(SimpleHTTPRequestHandler):
 
         if path == "/api/timesheet":
             start, end = query_period(query)
+            month = query.get("month", [datetime.now().strftime("%Y-%m")])[0]
             tutor_id = user["user_id"] if user["role"] != "Master" else int(query.get("tutor_id", [user["user_id"]])[0] or user["user_id"])
             with db() as conn:
+                tutor_record = conn.execute(
+                    "SELECT user_id, name, email, hourly_rate FROM users WHERE user_id = ?",
+                    (tutor_id,),
+                ).fetchone()
+                tutor = dict(tutor_record) if tutor_record else None
                 lessons = rows(conn.execute(
                     """
                     SELECT lr.*, b.start_at, b.duration_minutes, s.student_name,
@@ -536,8 +822,19 @@ class Handler(SimpleHTTPRequestHandler):
                     """,
                     (tutor_id, start, end),
                 ))
-            if query.get("format", [""])[0] == "csv":
+            if not tutor:
+                return self.send_json({"error": "Tutor not found"}, 404)
+            download_format = query.get("format", [""])[0].lower()
+            if download_format == "csv":
                 return self.export_timesheet_csv(lessons)
+            if download_format == "pdf":
+                filename_name = re.sub(r"[^a-z0-9]+", "-", tutor["name"].lower()).strip("-") or "tutor"
+                filename_month = re.sub(r"[^0-9-]+", "", month) or datetime.now().strftime("%Y-%m")
+                return self.send_bytes(
+                    build_timesheet_pdf(lessons, tutor, month),
+                    f"swl-education-timesheet-{filename_month}-{filename_name}.pdf",
+                    "application/pdf",
+                )
             return self.send_json({"lessons": lessons})
 
         if path == "/api/backup":

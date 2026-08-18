@@ -62,6 +62,7 @@ const els = {
   timesheetTutor: $("#timesheetTutor"),
   loadTimesheet: $("#loadTimesheet"),
   downloadTimesheet: $("#downloadTimesheet"),
+  downloadTimesheetPdf: $("#downloadTimesheetPdf"),
   submitTimesheet: $("#submitTimesheet"),
   timesheetSummary: $("#timesheetSummary"),
   timesheetList: $("#timesheetList"),
@@ -542,8 +543,8 @@ async function completeLesson(event) {
     }),
   });
   if (els.emailParent.checked) {
-    const subject = `Lesson notes for ${data.student_name}`;
-    const body = els.parentSummary.value;
+    const subject = `Lesson Notes - ${data.student_name}`;
+    const body = `LESSON NOTES\n\nStudent: ${data.student_name}\n\n${els.parentSummary.value}\n\nKind regards,\nSWL Education Ltd`;
     const href = `mailto:${encodeURIComponent(data.parent_email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     els.emailDraftPanel.hidden = false;
     if (data.email_sent) {
@@ -611,9 +612,22 @@ function lessonItem(lesson, rateKey) {
   `;
 }
 
-function openTimesheetDownload() {
+function downloadTimesheetFile(format) {
   const tutorQuery = currentUser.role === "Master" && els.timesheetTutor.value ? `&tutor_id=${encodeURIComponent(els.timesheetTutor.value)}` : "";
-  window.open(`/api/timesheet?month=${encodeURIComponent(els.timesheetMonth.value)}${tutorQuery}&format=csv`, "_blank");
+  const link = document.createElement("a");
+  link.href = `/api/timesheet?month=${encodeURIComponent(els.timesheetMonth.value)}${tutorQuery}&format=${encodeURIComponent(format)}`;
+  link.download = "";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function openTimesheetDownload() {
+  downloadTimesheetFile("csv");
+}
+
+function openTimesheetPdf() {
+  downloadTimesheetFile("pdf");
 }
 
 async function submitTimesheet() {
@@ -707,6 +721,7 @@ els.loadTimesheet.addEventListener("click", loadTimesheet);
 els.timesheetMonth.addEventListener("change", loadTimesheet);
 els.timesheetTutor.addEventListener("change", loadTimesheet);
 els.downloadTimesheet.addEventListener("click", openTimesheetDownload);
+els.downloadTimesheetPdf.addEventListener("click", openTimesheetPdf);
 els.submitTimesheet.addEventListener("click", submitTimesheet);
 els.approveTimesheet.addEventListener("click", () => setTimesheetStatus("Approved"));
 els.queryTimesheet.addEventListener("click", () => setTimesheetStatus("Queried"));

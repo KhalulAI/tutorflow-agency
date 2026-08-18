@@ -5,12 +5,14 @@ import tempfile
 import threading
 import unittest
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 from unittest.mock import patch
 
 import server
+from pypdf import PdfReader
 
 
 class AgencyApiTests(unittest.TestCase):
@@ -269,6 +271,18 @@ class AgencyApiTests(unittest.TestCase):
         )
         self.assertEqual(timesheet["lessons"][0]["tutor_rate"], 40)
         self.assertNotIn("student_rate", timesheet["lessons"][0])
+        pdf_request = Request(
+            self.base_url + f"/api/timesheet?month={start_at[:7]}&format=pdf",
+            method="GET",
+        )
+        with tutor_opener.open(pdf_request) as response:
+            pdf = response.read()
+            self.assertEqual(response.headers.get_content_type(), "application/pdf")
+        pdf_text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages)
+        self.assertIn("SWL EDUCATION LTD", pdf_text)
+        self.assertIn("Private Rate Tutor", pdf_text)
+        self.assertIn("GBP 40.00", pdf_text)
+        self.assertNotIn("GBP 80.00", pdf_text)
         _, tutor_report = self.api(
             f"/api/reports/lessons?month={start_at[:7]}", opener=tutor_opener
         )
@@ -277,6 +291,33 @@ class AgencyApiTests(unittest.TestCase):
 
         _, master_report = self.api(f"/api/reports/lessons?month={start_at[:7]}")
         self.assertEqual(master_report["lessons"][0]["student_rate"], 80)
+
+
+class TimesheetPdfTests(unittest.TestCase):
+    def test_pdf_is_branded_and_excludes_school_year(self):
+        pdf = server.build_timesheet_pdf(
+            [{
+                "start_at": "2026-08-17T16:00:00",
+                "completed_at": "2026-08-17T17:00:00",
+                "duration_minutes": 60,
+                "student_name": "Ada Student",
+                "year_group": "Year 8",
+                "tutor_rate": 40,
+                "attendance_status": "Attended",
+                "timesheet_status": "Approved",
+            }],
+            {"name": "Grace Tutor", "email": "grace@example.com", "hourly_rate": 40},
+            "2026-08",
+        )
+
+        self.assertTrue(pdf.startswith(b"%PDF"))
+        text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages)
+        self.assertIn("SWL EDUCATION LTD", text)
+        self.assertIn("Monthly Tutor Timesheet", text)
+        self.assertIn("Grace Tutor", text)
+        self.assertIn("Ada Student", text)
+        self.assertNotIn("Year 8", text)
+        self.assertNotIn("school year", text.lower())
 
 
 class PostmarkTests(unittest.TestCase):
@@ -311,6 +352,10 @@ class PostmarkTests(unittest.TestCase):
         self.assertEqual(message["From"], "TutorFlow <sender@example.com>")
         self.assertEqual(message["To"], "parent@example.com")
         self.assertEqual(message["ReplyTo"], "tutor@example.com")
+        self.assertEqual(message["Subject"], "Lesson Notes - Ada Student")
+        self.assertTrue(message["TextBody"].startswith("LESSON NOTES\n\nStudent: Ada Student"))
+        self.assertIn("Great work.", message["TextBody"])
+        self.assertTrue(message["TextBody"].rstrip().endswith("SWL Education Ltd"))
 
 
 if __name__ == "__main__":
