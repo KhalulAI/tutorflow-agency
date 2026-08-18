@@ -27,6 +27,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8010"))
 SESSION_COOKIE = "tutorflow_agency_session"
+POSTMARK_FROM_NAME = "SWL Education - TutorFlow"
 
 
 def now_iso() -> str:
@@ -194,7 +195,7 @@ def postmark_configured() -> bool:
 def send_postmark_email(recipient: str, subject: str, body: str, reply_to: str = "") -> str:
     token = os.environ.get("POSTMARK_SERVER_TOKEN", "").strip()
     from_email = os.environ.get("POSTMARK_FROM_EMAIL", "").strip()
-    from_name = os.environ.get("POSTMARK_FROM_NAME", "SWL Education - TutorFlow").strip()
+    from_name = POSTMARK_FROM_NAME
     if not token or not from_email:
         raise RuntimeError("Postmark is not configured. Set POSTMARK_SERVER_TOKEN and POSTMARK_FROM_EMAIL.")
     if not recipient:
@@ -240,9 +241,7 @@ def send_postmark_email(recipient: str, subject: str, body: str, reply_to: str =
 def send_lesson_email(recipient: str, student_name: str, summary: str, reply_to: str = "") -> str:
     if not recipient:
         raise ValueError("The student does not have a parent email address.")
-    body = f"""LESSON NOTES
-
-Student: {student_name}
+    body = f"""Student: {student_name}
 
 {summary}
 

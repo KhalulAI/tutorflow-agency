@@ -335,7 +335,7 @@ class PostmarkTests(unittest.TestCase):
         environment = {
             "POSTMARK_SERVER_TOKEN": "test-token",
             "POSTMARK_FROM_EMAIL": "sender@example.com",
-            "POSTMARK_FROM_NAME": "SWL Education - TutorFlow",
+            "POSTMARK_FROM_NAME": "TutorFlow Agency",
             "POSTMARK_MESSAGE_STREAM": "outbound",
         }
         with patch.dict(os.environ, environment, clear=False), patch.object(
@@ -353,7 +353,8 @@ class PostmarkTests(unittest.TestCase):
         self.assertEqual(message["To"], "parent@example.com")
         self.assertEqual(message["ReplyTo"], "tutor@example.com")
         self.assertEqual(message["Subject"], "Lesson Notes - Ada Student")
-        self.assertTrue(message["TextBody"].startswith("LESSON NOTES\n\nStudent: Ada Student"))
+        self.assertTrue(message["TextBody"].startswith("Student: Ada Student"))
+        self.assertNotIn("LESSON NOTES", message["TextBody"])
         self.assertIn("Great work.", message["TextBody"])
         self.assertTrue(message["TextBody"].rstrip().endswith("SWL Education Ltd"))
 

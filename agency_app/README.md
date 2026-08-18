@@ -65,7 +65,6 @@ POSTMARK_FROM_EMAIL=verified-sender@example.com
 Optional:
 
 ```text
-POSTMARK_FROM_NAME=SWL Education - TutorFlow
 POSTMARK_MESSAGE_STREAM=outbound
 ```
 

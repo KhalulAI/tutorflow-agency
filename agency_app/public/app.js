@@ -21,6 +21,7 @@ const els = {
   homeStats: $("#homeStats"),
   upcomingList: $("#upcomingList"),
   completionList: $("#completionList"),
+  completedLessonList: $("#completedLessonList"),
   tutorForm: $("#tutorForm"),
   tutorName: $("#tutorName"),
   tutorEmail: $("#tutorEmail"),
@@ -544,7 +545,7 @@ async function completeLesson(event) {
   });
   if (els.emailParent.checked) {
     const subject = `Lesson Notes - ${data.student_name}`;
-    const body = `LESSON NOTES\n\nStudent: ${data.student_name}\n\n${els.parentSummary.value}\n\nKind regards,\nSWL Education Ltd`;
+    const body = `Student: ${data.student_name}\n\n${els.parentSummary.value}\n\nKind regards,\nSWL Education Ltd`;
     const href = `mailto:${encodeURIComponent(data.parent_email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     els.emailDraftPanel.hidden = false;
     if (data.email_sent) {
@@ -578,7 +579,24 @@ async function loadHome() {
   `;
   els.upcomingList.innerHTML = upcoming.length ? upcoming.map(bookingItem).join("") : `<div class="notice">No upcoming lessons this month.</div>`;
   els.completionList.innerHTML = incomplete.length ? incomplete.map(bookingItem).join("") : `<div class="notice">No overdue lesson notes.</div>`;
+  els.completedLessonList.innerHTML = done.length ? done.map(completedLessonItem).join("") : `<div class="notice">No completed lessons recorded for this month.</div>`;
   $$("[data-open-calendar]").forEach((button) => button.addEventListener("click", () => switchTab("calendar")));
+}
+
+function completedLessonItem(lesson) {
+  const emailed = Number(lesson.emailed_to_parent || 0) === 1;
+  return `
+    <article class="item">
+      <div class="item-head">
+        <h4>${escapeHtml(lesson.student_name)}</h4>
+        <span class="pill">${escapeHtml(lesson.attendance_status || "Completed")}</span>
+      </div>
+      <p>${formatDateTime(lesson.start_at || lesson.completed_at)} / ${lesson.duration_minutes || 0} mins</p>
+      <p><strong>Tutor:</strong> ${escapeHtml(lesson.tutor_name)}</p>
+      <p><strong>Lesson notes:</strong> ${escapeHtml(lesson.parent_summary || "No notes recorded.")}</p>
+      <p>${emailed ? "Notes emailed to parent" : "Notes not emailed to parent"}</p>
+    </article>
+  `;
 }
 
 function bookingItem(booking) {
