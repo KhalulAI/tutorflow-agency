@@ -335,7 +335,7 @@ class PostmarkTests(unittest.TestCase):
         environment = {
             "POSTMARK_SERVER_TOKEN": "test-token",
             "POSTMARK_FROM_EMAIL": "sender@example.com",
-            "POSTMARK_FROM_NAME": "TutorFlow",
+            "POSTMARK_FROM_NAME": "SWL Education - TutorFlow",
             "POSTMARK_MESSAGE_STREAM": "outbound",
         }
         with patch.dict(os.environ, environment, clear=False), patch.object(
@@ -349,7 +349,7 @@ class PostmarkTests(unittest.TestCase):
         request = mocked_urlopen.call_args.args[0]
         message = json.loads(request.data.decode("utf-8"))
         self.assertEqual(request.get_header("X-postmark-server-token"), "test-token")
-        self.assertEqual(message["From"], "TutorFlow <sender@example.com>")
+        self.assertEqual(message["From"], "SWL Education - TutorFlow <sender@example.com>")
         self.assertEqual(message["To"], "parent@example.com")
         self.assertEqual(message["ReplyTo"], "tutor@example.com")
         self.assertEqual(message["Subject"], "Lesson Notes - Ada Student")

@@ -194,7 +194,7 @@ def postmark_configured() -> bool:
 def send_postmark_email(recipient: str, subject: str, body: str, reply_to: str = "") -> str:
     token = os.environ.get("POSTMARK_SERVER_TOKEN", "").strip()
     from_email = os.environ.get("POSTMARK_FROM_EMAIL", "").strip()
-    from_name = os.environ.get("POSTMARK_FROM_NAME", "TutorFlow Agency").strip()
+    from_name = os.environ.get("POSTMARK_FROM_NAME", "SWL Education - TutorFlow").strip()
     if not token or not from_email:
         raise RuntimeError("Postmark is not configured. Set POSTMARK_SERVER_TOKEN and POSTMARK_FROM_EMAIL.")
     if not recipient:
