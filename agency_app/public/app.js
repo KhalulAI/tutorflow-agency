@@ -373,10 +373,10 @@ function renderStudents() {
     <article class="item" data-student-id="${student.student_id}">
       <div class="item-head"><h4>${escapeHtml(student.student_name)}</h4><span class="pill">${escapeHtml(student.tutor_name || "Unassigned")}</span></div>
       <p>${escapeHtml(student.parent_name || "No parent")} / ${escapeHtml(student.parent_email || "No email")}</p>
-      <p>${escapeHtml(student.year_group || "No year group")} / ${escapeHtml(student.target_school || "No target")} / ${money(student.hourly_rate)} per hour</p>
-      <div class="button-row">
+      <p>${escapeHtml(student.year_group || "No year group")} / ${escapeHtml(student.target_school || "No target")}${currentUser.role === "Master" ? ` / ${money(student.hourly_rate)} charged per hour` : ""}</p>
+      ${currentUser.role === "Master" ? `<div class="button-row">
         <button type="button" data-edit-student="${student.student_id}">Edit Student</button>
-      </div>
+      </div>` : ""}
     </article>
   `).join("") : `<div class="notice">No students yet.</div>`;
   $$("[data-edit-student]").forEach((button) => button.addEventListener("click", () => editStudent(Number(button.dataset.editStudent))));
@@ -595,13 +595,13 @@ async function loadTimesheet() {
   const tutorQuery = currentUser.role === "Master" && els.timesheetTutor.value ? `&tutor_id=${encodeURIComponent(els.timesheetTutor.value)}` : "";
   const data = await api(`/api/timesheet?month=${encodeURIComponent(els.timesheetMonth.value)}${tutorQuery}`);
   const rows = data.lessons;
-  const total = rows.reduce((sum, lesson) => sum + (Number(lesson.duration_minutes || 0) / 60) * Number(lesson.student_rate || 0), 0);
+  const total = rows.reduce((sum, lesson) => sum + (Number(lesson.duration_minutes || 0) / 60) * Number(lesson.tutor_rate || 0), 0);
   els.timesheetSummary.textContent = `${rows.length} completed lessons / ${money(total)} total`;
-  els.timesheetList.innerHTML = rows.length ? rows.map(lessonItem).join("") : `<div class="notice">No completed lessons for this period.</div>`;
+  els.timesheetList.innerHTML = rows.length ? rows.map((lesson) => lessonItem(lesson, "tutor_rate")).join("") : `<div class="notice">No completed lessons for this period.</div>`;
 }
 
-function lessonItem(lesson) {
-  const fee = (Number(lesson.duration_minutes || 0) / 60) * Number(lesson.student_rate || 0);
+function lessonItem(lesson, rateKey) {
+  const fee = (Number(lesson.duration_minutes || 0) / 60) * Number(lesson[rateKey] || 0);
   return `
     <article class="item">
       <div class="item-head"><h4>${escapeHtml(lesson.student_name)}</h4><span class="pill">${money(fee)}</span></div>
@@ -637,7 +637,8 @@ async function loadReports() {
   if (els.reportStudent.value) qs.set("student_id", els.reportStudent.value);
   const data = await api(`/api/reports/lessons?${qs.toString()}`);
   lessons = data.lessons;
-  const totalFees = lessons.reduce((sum, lesson) => sum + (Number(lesson.duration_minutes || 0) / 60) * Number(lesson.student_rate || 0), 0);
+  const rateKey = currentUser.role === "Master" ? "student_rate" : "tutor_rate";
+  const totalFees = lessons.reduce((sum, lesson) => sum + (Number(lesson.duration_minutes || 0) / 60) * Number(lesson[rateKey] || 0), 0);
   const byTutor = {};
   const byStudent = {};
   lessons.forEach((lesson) => {
@@ -651,7 +652,7 @@ async function loadReports() {
       Students: ${Object.entries(byStudent).map(([name, count]) => `${escapeHtml(name)} (${count})`).join(", ") || "none"}.
     </div>
   `;
-  els.reportList.innerHTML = lessons.length ? summary + lessons.map(lessonItem).join("") : `<div class="notice">No lesson records match this report.</div>`;
+  els.reportList.innerHTML = lessons.length ? summary + lessons.map((lesson) => lessonItem(lesson, rateKey)).join("") : `<div class="notice">No lesson records match this report.</div>`;
 }
 
 function downloadReports() {

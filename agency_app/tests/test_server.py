@@ -36,7 +36,7 @@ class AgencyApiTests(unittest.TestCase):
         server.send_tutor_credentials_email = self.original_send_credentials
         self.temp_dir.cleanup()
 
-    def api(self, path, method="GET", body=None):
+    def api(self, path, method="GET", body=None, opener=None):
         data = json.dumps(body).encode("utf-8") if body is not None else None
         request = Request(
             self.base_url + path,
@@ -44,7 +44,7 @@ class AgencyApiTests(unittest.TestCase):
             method=method,
             headers={"Content-Type": "application/json"},
         )
-        with self.opener.open(request) as response:
+        with (opener or self.opener).open(request) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
 
     def login_as_master(self):
@@ -214,6 +214,69 @@ class AgencyApiTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, 409)
         error = json.loads(raised.exception.read().decode("utf-8"))
         self.assertIn("cannot be removed", error["error"])
+
+    def test_tutor_only_receives_own_pay_rate(self):
+        self.login_as_master()
+        _, created = self.api(
+            "/api/users",
+            "POST",
+            {"name": "Private Rate Tutor", "email": "private@example.com", "hourly_rate": 40},
+        )
+        _, users = self.api("/api/users")
+        tutor = next(item for item in users["users"] if item["role"] == "Tutor")
+        self.api(
+            "/api/students",
+            "POST",
+            {
+                "student_name": "Private Rate Student",
+                "parent_email": "parent@example.com",
+                "hourly_rate": 80,
+                "assigned_tutor_id": tutor["user_id"],
+            },
+        )
+        _, students = self.api("/api/students")
+        student_id = students["students"][0]["student_id"]
+        start_at = datetime.now().replace(day=17, hour=16, minute=0, second=0, microsecond=0).isoformat()
+        self.api(
+            "/api/bookings",
+            "POST",
+            {
+                "student_id": student_id,
+                "tutor_id": tutor["user_id"],
+                "start_at": start_at,
+                "duration_minutes": 60,
+            },
+        )
+        _, bookings = self.api(f"/api/bookings?month={start_at[:7]}")
+        booking_id = bookings["bookings"][0]["booking_id"]
+        self.api(
+            f"/api/bookings/{booking_id}/complete",
+            "POST",
+            {"parent_summary": "A saved lesson note.", "emailed_to_parent": False},
+        )
+
+        tutor_opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        self.api(
+            "/api/login",
+            "POST",
+            {"email": "private@example.com", "password": created["temporary_password"]},
+            opener=tutor_opener,
+        )
+        _, tutor_students = self.api("/api/students", opener=tutor_opener)
+        self.assertNotIn("hourly_rate", tutor_students["students"][0])
+        _, timesheet = self.api(
+            f"/api/timesheet?month={start_at[:7]}", opener=tutor_opener
+        )
+        self.assertEqual(timesheet["lessons"][0]["tutor_rate"], 40)
+        self.assertNotIn("student_rate", timesheet["lessons"][0])
+        _, tutor_report = self.api(
+            f"/api/reports/lessons?month={start_at[:7]}", opener=tutor_opener
+        )
+        self.assertEqual(tutor_report["lessons"][0]["tutor_rate"], 40)
+        self.assertNotIn("student_rate", tutor_report["lessons"][0])
+
+        _, master_report = self.api(f"/api/reports/lessons?month={start_at[:7]}")
+        self.assertEqual(master_report["lessons"][0]["student_rate"], 80)
 
 
 class PostmarkTests(unittest.TestCase):

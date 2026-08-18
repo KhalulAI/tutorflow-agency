@@ -442,10 +442,17 @@ class Handler(SimpleHTTPRequestHandler):
 
         if path == "/api/students":
             where, params = self.visible_student_filter(user)
+            student_columns = (
+                "s.*"
+                if user["role"] == "Master"
+                else """s.student_id, s.student_name, s.parent_name, s.parent_email,
+                        s.year_group, s.target_school, s.assigned_tutor_id,
+                        s.active, s.created_at"""
+            )
             with db() as conn:
                 students = rows(conn.execute(
                     f"""
-                    SELECT s.*, u.name AS tutor_name
+                    SELECT {student_columns}, u.name AS tutor_name
                     FROM students s
                     LEFT JOIN users u ON u.user_id = s.assigned_tutor_id
                     {where}
@@ -488,11 +495,16 @@ class Handler(SimpleHTTPRequestHandler):
             if query.get("student_id", [""])[0]:
                 clauses.append("lr.student_id = ?")
                 params.append(query["student_id"][0])
+            rate_columns = (
+                "s.hourly_rate AS student_rate, u.hourly_rate AS tutor_rate"
+                if user["role"] == "Master"
+                else "u.hourly_rate AS tutor_rate"
+            )
             with db() as conn:
                 lessons = rows(conn.execute(
                     f"""
                     SELECT lr.*, b.start_at, b.duration_minutes, s.student_name, s.parent_email,
-                           s.hourly_rate AS student_rate, u.name AS tutor_name
+                           {rate_columns}, u.name AS tutor_name
                     FROM lesson_records lr
                     LEFT JOIN bookings b ON b.booking_id = lr.booking_id
                     JOIN students s ON s.student_id = lr.student_id
@@ -503,7 +515,8 @@ class Handler(SimpleHTTPRequestHandler):
                     params,
                 ))
             if query.get("format", [""])[0] == "csv":
-                return self.export_lessons_csv(lessons)
+                rate_key = "student_rate" if user["role"] == "Master" else "tutor_rate"
+                return self.export_lessons_csv(lessons, rate_key)
             return self.send_json({"lessons": lessons})
 
         if path == "/api/timesheet":
@@ -512,8 +525,8 @@ class Handler(SimpleHTTPRequestHandler):
             with db() as conn:
                 lessons = rows(conn.execute(
                     """
-                    SELECT lr.*, b.start_at, b.duration_minutes, s.student_name, s.hourly_rate AS student_rate,
-                           u.name AS tutor_name
+                    SELECT lr.*, b.start_at, b.duration_minutes, s.student_name,
+                           u.hourly_rate AS tutor_rate, u.name AS tutor_name
                     FROM lesson_records lr
                     LEFT JOIN bookings b ON b.booking_id = lr.booking_id
                     JOIN students s ON s.student_id = lr.student_id
@@ -982,13 +995,19 @@ class Handler(SimpleHTTPRequestHandler):
 
         return self.send_json({"error": "Not found"}, 404)
 
-    def export_lessons_csv(self, lessons):
-        return self.send_csv("lesson-report.csv", self.csv_for_lessons(lessons, include_notes=True))
+    def export_lessons_csv(self, lessons, rate_key="student_rate"):
+        return self.send_csv(
+            "lesson-report.csv",
+            self.csv_for_lessons(lessons, include_notes=True, rate_key=rate_key),
+        )
 
     def export_timesheet_csv(self, lessons):
-        return self.send_csv("timesheet.csv", self.csv_for_lessons(lessons, include_notes=False))
+        return self.send_csv(
+            "timesheet.csv",
+            self.csv_for_lessons(lessons, include_notes=False, rate_key="tutor_rate"),
+        )
 
-    def csv_for_lessons(self, lessons, include_notes: bool):
+    def csv_for_lessons(self, lessons, include_notes: bool, rate_key: str):
         from io import StringIO
 
         output = StringIO()
@@ -999,7 +1018,7 @@ class Handler(SimpleHTTPRequestHandler):
         writer.writeheader()
         for lesson in lessons:
             minutes = int(lesson.get("duration_minutes") or 0)
-            rate = float(lesson.get("student_rate") or 0)
+            rate = float(lesson.get(rate_key) or 0)
             row = {
                 "Date": lesson.get("start_at") or lesson.get("completed_at"),
                 "Student": lesson.get("student_name", ""),
