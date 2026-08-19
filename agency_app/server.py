@@ -794,8 +794,10 @@ class Handler(SimpleHTTPRequestHandler):
                     params,
                 ))
             if query.get("format", [""])[0] == "csv":
-                rate_key = "student_rate" if user["role"] == "Master" else "tutor_rate"
-                return self.export_lessons_csv(lessons, rate_key)
+                if user["role"] == "Master":
+                    month = query.get("month", [start[:7]])[0]
+                    return self.export_invoicing_csv(lessons, month)
+                return self.export_lessons_csv(lessons, "tutor_rate")
             return self.send_json({"lessons": lessons})
 
         if path == "/api/timesheet":
@@ -1297,6 +1299,13 @@ class Handler(SimpleHTTPRequestHandler):
             self.csv_for_lessons(lessons, include_notes=True, rate_key=rate_key),
         )
 
+    def export_invoicing_csv(self, lessons, month):
+        safe_month = "".join(character for character in str(month) if character.isdigit() or character == "-")
+        return self.send_csv(
+            f"swl-education-month-end-{safe_month or 'report'}.csv",
+            self.csv_for_invoicing(lessons),
+        )
+
     def export_timesheet_csv(self, lessons):
         return self.send_csv(
             "timesheet.csv",
@@ -1328,6 +1337,58 @@ class Handler(SimpleHTTPRequestHandler):
             if include_notes:
                 row["Parent Notes"] = lesson.get("parent_summary", "")
             writer.writerow(row)
+        return output.getvalue()
+
+    def csv_for_invoicing(self, lessons):
+        from io import StringIO
+
+        output = StringIO()
+        fields = [
+            "Date",
+            "Student",
+            "Tutor",
+            "Duration (minutes)",
+            "Client Hourly Rate",
+            "Amount Charged",
+            "Tutor Hourly Rate",
+            "Tutor Pay",
+            "Agency Gross Margin",
+            "Status",
+            "Timesheet Status",
+            "Parent Notes",
+        ]
+        writer = csv.DictWriter(output, fieldnames=fields)
+        writer.writeheader()
+        total_charged = 0.0
+        total_tutor_pay = 0.0
+        for lesson in lessons:
+            minutes = int(lesson.get("duration_minutes") or 0)
+            client_rate = float(lesson.get("student_rate") or 0)
+            tutor_rate = float(lesson.get("tutor_rate") or 0)
+            amount_charged = round((minutes / 60) * client_rate, 2)
+            tutor_pay = round((minutes / 60) * tutor_rate, 2)
+            total_charged += amount_charged
+            total_tutor_pay += tutor_pay
+            writer.writerow({
+                "Date": lesson.get("start_at") or lesson.get("completed_at"),
+                "Student": lesson.get("student_name", ""),
+                "Tutor": lesson.get("tutor_name", ""),
+                "Duration (minutes)": minutes,
+                "Client Hourly Rate": round(client_rate, 2),
+                "Amount Charged": amount_charged,
+                "Tutor Hourly Rate": round(tutor_rate, 2),
+                "Tutor Pay": tutor_pay,
+                "Agency Gross Margin": round(amount_charged - tutor_pay, 2),
+                "Status": lesson.get("attendance_status", ""),
+                "Timesheet Status": lesson.get("timesheet_status") or ("Submitted" if lesson.get("timesheet_submitted") else "Draft"),
+                "Parent Notes": lesson.get("parent_summary", ""),
+            })
+        writer.writerow({
+            "Date": "MONTH TOTAL",
+            "Amount Charged": round(total_charged, 2),
+            "Tutor Pay": round(total_tutor_pay, 2),
+            "Agency Gross Margin": round(total_charged - total_tutor_pay, 2),
+        })
         return output.getvalue()
 
 

@@ -671,6 +671,7 @@ async function loadReports() {
   lessons = data.lessons;
   const rateKey = currentUser.role === "Master" ? "student_rate" : "tutor_rate";
   const totalFees = lessons.reduce((sum, lesson) => sum + (Number(lesson.duration_minutes || 0) / 60) * Number(lesson[rateKey] || 0), 0);
+  const totalTutorPay = lessons.reduce((sum, lesson) => sum + (Number(lesson.duration_minutes || 0) / 60) * Number(lesson.tutor_rate || 0), 0);
   const byTutor = {};
   const byStudent = {};
   lessons.forEach((lesson) => {
@@ -679,7 +680,7 @@ async function loadReports() {
   });
   const summary = `
     <div class="notice">
-      ${lessons.length} lessons / ${money(totalFees)} total.
+      ${lessons.length} lessons / ${money(totalFees)} charged / ${money(totalTutorPay)} tutor pay / ${money(totalFees - totalTutorPay)} gross margin.
       Tutors: ${Object.entries(byTutor).map(([name, count]) => `${escapeHtml(name)} (${count})`).join(", ") || "none"}.
       Students: ${Object.entries(byStudent).map(([name, count]) => `${escapeHtml(name)} (${count})`).join(", ") || "none"}.
     </div>

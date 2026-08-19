@@ -292,6 +292,26 @@ class AgencyApiTests(unittest.TestCase):
         _, master_report = self.api(f"/api/reports/lessons?month={start_at[:7]}")
         self.assertEqual(master_report["lessons"][0]["student_rate"], 80)
 
+        master_csv_request = Request(
+            self.base_url + f"/api/reports/lessons?month={start_at[:7]}&format=csv",
+            method="GET",
+        )
+        with self.opener.open(master_csv_request) as response:
+            master_csv = response.read().decode("utf-8-sig")
+            self.assertEqual(response.headers.get_content_type(), "text/csv")
+        self.assertIn("Client Hourly Rate,Amount Charged,Tutor Hourly Rate,Tutor Pay,Agency Gross Margin", master_csv)
+        self.assertIn("80.0,80.0,40.0,40.0,40.0", master_csv)
+        self.assertIn("MONTH TOTAL,,,,,80.0,,40.0,40.0", master_csv)
+
+        tutor_csv_request = Request(
+            self.base_url + f"/api/reports/lessons?month={start_at[:7]}&format=csv",
+            method="GET",
+        )
+        with tutor_opener.open(tutor_csv_request) as response:
+            tutor_csv = response.read().decode("utf-8-sig")
+        self.assertNotIn("Client Hourly Rate", tutor_csv)
+        self.assertNotIn("Amount Charged", tutor_csv)
+
 
 class TimesheetPdfTests(unittest.TestCase):
     def test_pdf_is_branded_and_excludes_school_year(self):
