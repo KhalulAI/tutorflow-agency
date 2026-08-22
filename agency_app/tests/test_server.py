@@ -81,7 +81,7 @@ class AgencyApiTests(unittest.TestCase):
             {
                 "student_name": "Ada Student",
                 "parent_name": "Pat Parent",
-                "parent_email": "parent@example.com",
+                "parent_email": "parent@example.com; second@example.com",
             },
         )
         _, students = self.api("/api/students")
@@ -117,7 +117,7 @@ class AgencyApiTests(unittest.TestCase):
         )
         self.assertTrue(result["email_sent"])
         self.assertEqual(result["postmark_message_id"], "postmark-message-id")
-        self.assertEqual(calls[0][0], "parent@example.com")
+        self.assertEqual(calls[0][0], "parent@example.com, second@example.com")
         with server.db() as connection:
             lesson = connection.execute(
                 "SELECT emailed_to_parent FROM lesson_records WHERE booking_id = ?", (booking_id,)
@@ -311,6 +311,159 @@ class AgencyApiTests(unittest.TestCase):
             tutor_csv = response.read().decode("utf-8-sig")
         self.assertNotIn("Client Hourly Rate", tutor_csv)
         self.assertNotIn("Amount Charged", tutor_csv)
+
+    def test_student_can_be_unassigned_archived_or_permanently_deleted(self):
+        self.login_as_master()
+        _, created = self.api(
+            "/api/users", "POST", {"name": "Removal Tutor", "email": "remove@example.com", "hourly_rate": 35}
+        )
+        _, users = self.api("/api/users")
+        tutor = next(item for item in users["users"] if item["role"] == "Tutor")
+        self.api(
+            "/api/students",
+            "POST",
+            {"student_name": "Removal Student", "assigned_tutor_id": tutor["user_id"]},
+        )
+        _, student_data = self.api("/api/students")
+        student_id = student_data["students"][0]["student_id"]
+
+        self.api(f"/api/students/{student_id}/remove", "POST", {"mode": "unassign"})
+        _, student_data = self.api("/api/students")
+        self.assertIsNone(student_data["students"][0]["assigned_tutor_id"])
+        self.assertEqual(student_data["students"][0]["active"], 1)
+
+        self.api(
+            f"/api/students/{student_id}/update",
+            "POST",
+            {
+                "student_name": "Removal Student",
+                "assigned_tutor_id": tutor["user_id"],
+                "active": True,
+            },
+        )
+        start_at = datetime.now().replace(day=18, hour=16, minute=0, second=0, microsecond=0).isoformat()
+        self.api(
+            "/api/bookings",
+            "POST",
+            {"student_id": student_id, "tutor_id": tutor["user_id"], "start_at": start_at, "duration_minutes": 60},
+        )
+        _, bookings = self.api(f"/api/bookings?month={start_at[:7]}")
+        self.api(
+            f"/api/bookings/{bookings['bookings'][0]['booking_id']}/complete",
+            "POST",
+            {"parent_summary": "Retained note", "emailed_to_parent": False},
+        )
+
+        self.api(f"/api/students/{student_id}/remove", "POST", {"mode": "archive"})
+        _, archived = self.api("/api/students")
+        self.assertEqual(archived["students"][0]["active"], 0)
+        self.assertIsNone(archived["students"][0]["assigned_tutor_id"])
+        with server.db() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) AS count FROM bookings").fetchone()["count"], 1)
+            self.assertEqual(connection.execute("SELECT COUNT(*) AS count FROM lesson_records").fetchone()["count"], 1)
+
+        _, deleted = self.api(f"/api/students/{student_id}/remove", "POST", {"mode": "delete"})
+        self.assertEqual(deleted["deleted_bookings"], 1)
+        self.assertEqual(deleted["deleted_lesson_records"], 1)
+        _, remaining = self.api("/api/students")
+        self.assertEqual(remaining["students"], [])
+
+    def test_master_finance_reports_expenses_snapshots_and_vat_are_private(self):
+        self.login_as_master()
+        _, created = self.api(
+            "/api/users", "POST", {"name": "Finance Tutor", "email": "finance@example.com", "hourly_rate": 40}
+        )
+        _, users = self.api("/api/users")
+        tutor = next(item for item in users["users"] if item["role"] == "Tutor")
+        self.api(
+            "/api/students",
+            "POST",
+            {
+                "student_name": "Finance Student",
+                "parent_email": "one@example.com, two@example.com",
+                "hourly_rate": 80,
+                "assigned_tutor_id": tutor["user_id"],
+            },
+        )
+        _, student_data = self.api("/api/students")
+        student = student_data["students"][0]
+        start_at = datetime.now().replace(day=19, hour=16, minute=0, second=0, microsecond=0).isoformat()
+        self.api(
+            "/api/bookings",
+            "POST",
+            {"student_id": student["student_id"], "tutor_id": tutor["user_id"], "start_at": start_at, "duration_minutes": 90},
+        )
+        _, bookings = self.api(f"/api/bookings?month={start_at[:7]}")
+        self.api(
+            f"/api/bookings/{bookings['bookings'][0]['booking_id']}/complete",
+            "POST",
+            {"parent_summary": "Finance note", "emailed_to_parent": False},
+        )
+
+        self.api(
+            f"/api/users/{tutor['user_id']}/update",
+            "POST",
+            {"name": tutor["name"], "email": tutor["email"], "hourly_rate": 55},
+        )
+        self.api(
+            f"/api/students/{student['student_id']}/update",
+            "POST",
+            {
+                "student_name": student["student_name"],
+                "parent_email": student["parent_email"],
+                "hourly_rate": 100,
+                "assigned_tutor_id": tutor["user_id"],
+                "active": True,
+            },
+        )
+        self.api(
+            "/api/expenses",
+            "POST",
+            {"expense_date": start_at[:10], "category": "Software", "description": "Monthly software", "amount": 10},
+        )
+        _, finance = self.api(f"/api/finance/summary?period=month&anchor={start_at[:10]}")
+        self.assertEqual(finance["summary"]["gross_income"], 120)
+        self.assertEqual(finance["summary"]["tutor_costs"], 60)
+        self.assertEqual(finance["summary"]["gross_margin"], 60)
+        self.assertEqual(finance["summary"]["expenses"], 10)
+        self.assertEqual(finance["summary"]["net_income"], 50)
+        self.assertEqual(finance["vat"]["turnover"], 120)
+        self.assertEqual(finance["vat"]["threshold"], 90000)
+        self.assertEqual(len(finance["vat"]["series"]), 12)
+        finance_csv_request = Request(
+            self.base_url + f"/api/finance/summary?period=month&anchor={start_at[:10]}&format=csv",
+            method="GET",
+        )
+        with self.opener.open(finance_csv_request) as response:
+            finance_csv = response.read().decode("utf-8-sig")
+        self.assertIn("Gross income,120.0", finance_csv)
+        self.assertIn("Tutor costs,60.0", finance_csv)
+        self.assertIn("Net income,50.0", finance_csv)
+
+        expense_id = finance["expenses"][0]["expense_id"]
+        self.api(f"/api/expenses/{expense_id}/delete", "POST", {})
+        _, after_delete = self.api(f"/api/finance/summary?period=month&anchor={start_at[:10]}")
+        self.assertEqual(after_delete["summary"]["expenses"], 0)
+        self.assertEqual(after_delete["summary"]["net_income"], 60)
+
+        tutor_opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        self.api(
+            "/api/login",
+            "POST",
+            {"email": "finance@example.com", "password": created["temporary_password"]},
+            opener=tutor_opener,
+        )
+        with self.assertRaises(HTTPError) as finance_error:
+            self.api(f"/api/finance/summary?period=month&anchor={start_at[:10]}", opener=tutor_opener)
+        self.assertEqual(finance_error.exception.code, 403)
+        with self.assertRaises(HTTPError) as expense_error:
+            self.api(
+                "/api/expenses",
+                "POST",
+                {"expense_date": start_at[:10], "description": "Private", "amount": 1},
+                opener=tutor_opener,
+            )
+        self.assertEqual(expense_error.exception.code, 403)
 
 
 class TimesheetPdfTests(unittest.TestCase):

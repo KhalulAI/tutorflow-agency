@@ -10,7 +10,7 @@ import secrets
 import sqlite3
 import time
 import zipfile
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from http import cookies
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
@@ -28,6 +28,14 @@ HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8010"))
 SESSION_COOKIE = "tutorflow_agency_session"
 POSTMARK_FROM_NAME = "SWL Education - TutorFlow"
+DEFAULT_VAT_THRESHOLD = 90_000.0
+
+
+def vat_threshold() -> float:
+    try:
+        return max(0.0, float(os.environ.get("VAT_THRESHOLD", DEFAULT_VAT_THRESHOLD)))
+    except (TypeError, ValueError):
+        return DEFAULT_VAT_THRESHOLD
 
 
 def now_iso() -> str:
@@ -97,6 +105,75 @@ def db() -> DatabaseConnection:
 
 def rows(items):
     return [dict(item) for item in items]
+
+
+def normalize_email_list(value) -> str:
+    raw_values = value if isinstance(value, list) else re.split(r"[,;\n]+", str(value or ""))
+    emails = []
+    for raw_email in raw_values:
+        email = str(raw_email).strip().lower()
+        if not email:
+            continue
+        if not re.fullmatch(r"[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+", email):
+            raise ValueError(f"Invalid parent email address: {email}")
+        if email not in emails:
+            emails.append(email)
+    if len(emails) > 10:
+        raise ValueError("Enter no more than 10 parent email addresses.")
+    return ", ".join(emails)
+
+
+def reporting_period(period: str, anchor_value: str = ""):
+    try:
+        anchor = date.fromisoformat(anchor_value) if anchor_value else date.today()
+    except ValueError as error:
+        raise ValueError("Choose a valid report date.") from error
+    if period == "day":
+        start_date, end_date = anchor, anchor + timedelta(days=1)
+    elif period == "week":
+        start_date = anchor - timedelta(days=anchor.weekday())
+        end_date = start_date + timedelta(days=7)
+    elif period == "month":
+        start_date = anchor.replace(day=1)
+        end_date = date(anchor.year + (anchor.month == 12), 1 if anchor.month == 12 else anchor.month + 1, 1)
+    elif period == "year":
+        start_date, end_date = date(anchor.year, 1, 1), date(anchor.year + 1, 1, 1)
+    elif period == "ytd":
+        start_date, end_date = date(anchor.year, 1, 1), anchor + timedelta(days=1)
+    else:
+        raise ValueError("Choose day, week, month, year, or year to date.")
+    return start_date, end_date
+
+
+def rolling_year_start(end_date: date) -> date:
+    try:
+        previous_year = end_date.replace(year=end_date.year - 1)
+    except ValueError:
+        previous_year = end_date.replace(year=end_date.year - 1, day=28)
+    return previous_year + timedelta(days=1)
+
+
+def shift_month(first_of_month: date, offset: int) -> date:
+    month_index = first_of_month.year * 12 + first_of_month.month - 1 + offset
+    return date(month_index // 12, month_index % 12 + 1, 1)
+
+
+def calculate_finances(lessons, expenses):
+    gross_income = 0.0
+    tutor_costs = 0.0
+    for lesson in lessons:
+        hours = float(lesson.get("duration_minutes") or 0) / 60
+        gross_income += hours * float(lesson.get("student_rate") or 0)
+        tutor_costs += hours * float(lesson.get("tutor_rate") or 0)
+    expense_total = sum(float(expense.get("amount") or 0) for expense in expenses)
+    return {
+        "gross_income": round(gross_income, 2),
+        "tutor_costs": round(tutor_costs, 2),
+        "gross_margin": round(gross_income - tutor_costs, 2),
+        "expenses": round(expense_total, 2),
+        "net_income": round(gross_income - tutor_costs - expense_total, 2),
+        "lesson_count": len(lessons),
+    }
 
 
 def ensure_column(conn, table: str, column: str, definition: str) -> None:
@@ -183,9 +260,44 @@ def init_db() -> None:
                 FOREIGN KEY(student_id) REFERENCES students(student_id) ON DELETE CASCADE,
                 FOREIGN KEY(tutor_id) REFERENCES users(user_id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS expenses (
+                expense_id {primary_key},
+                expense_date TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'Other',
+                description TEXT NOT NULL,
+                amount REAL NOT NULL,
+                created_by INTEGER,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(created_by) REFERENCES users(user_id) ON DELETE SET NULL
+            );
             """
         )
         ensure_column(conn, "lesson_records", "timesheet_status", "TEXT NOT NULL DEFAULT 'Draft'")
+        ensure_column(conn, "lesson_records", "duration_minutes", "INTEGER")
+        ensure_column(conn, "lesson_records", "client_hourly_rate", "REAL")
+        ensure_column(conn, "lesson_records", "tutor_hourly_rate", "REAL")
+        conn.execute(
+            """
+            UPDATE lesson_records
+            SET duration_minutes = (SELECT b.duration_minutes FROM bookings b WHERE b.booking_id = lesson_records.booking_id)
+            WHERE duration_minutes IS NULL
+            """
+        )
+        conn.execute(
+            """
+            UPDATE lesson_records
+            SET client_hourly_rate = (SELECT s.hourly_rate FROM students s WHERE s.student_id = lesson_records.student_id)
+            WHERE client_hourly_rate IS NULL
+            """
+        )
+        conn.execute(
+            """
+            UPDATE lesson_records
+            SET tutor_hourly_rate = (SELECT u.hourly_rate FROM users u WHERE u.user_id = lesson_records.tutor_id)
+            WHERE tutor_hourly_rate IS NULL
+            """
+        )
 
 
 def postmark_configured() -> bool:
@@ -302,6 +414,61 @@ def query_period(query):
     start_dt = datetime(today.year, today.month, 1)
     end_dt = datetime(today.year + (today.month == 12), 1 if today.month == 12 else today.month + 1, 1)
     return start_dt.isoformat(), end_dt.isoformat()
+
+
+def financial_lessons(conn, start_date: date, end_date: date):
+    return rows(conn.execute(
+        """
+        SELECT lr.completed_at,
+               COALESCE(lr.duration_minutes, b.duration_minutes, 0) AS duration_minutes,
+               COALESCE(lr.client_hourly_rate, s.hourly_rate, 0) AS student_rate,
+               COALESCE(lr.tutor_hourly_rate, u.hourly_rate, 0) AS tutor_rate
+        FROM lesson_records lr
+        LEFT JOIN bookings b ON b.booking_id = lr.booking_id
+        JOIN students s ON s.student_id = lr.student_id
+        JOIN users u ON u.user_id = lr.tutor_id
+        WHERE lr.completed_at >= ? AND lr.completed_at < ?
+        """,
+        (f"{start_date.isoformat()}T00:00:00", f"{end_date.isoformat()}T00:00:00"),
+    ))
+
+
+def period_expenses(conn, start_date: date, end_date: date):
+    return rows(conn.execute(
+        """
+        SELECT expense_id, expense_date, category, description, amount, created_at
+        FROM expenses
+        WHERE expense_date >= ? AND expense_date < ?
+        ORDER BY expense_date DESC, expense_id DESC
+        """,
+        (start_date.isoformat(), end_date.isoformat()),
+    ))
+
+
+def finance_csv(summary, expenses, period_label: str) -> str:
+    from io import StringIO
+
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["SWL Education Ltd - Internal Finance Report"])
+    writer.writerow(["Period", period_label])
+    writer.writerow([])
+    writer.writerow(["Metric", "Amount (GBP)"])
+    writer.writerow(["Gross income", summary["gross_income"]])
+    writer.writerow(["Tutor costs", summary["tutor_costs"]])
+    writer.writerow(["Gross margin", summary["gross_margin"]])
+    writer.writerow(["Other expenses", summary["expenses"]])
+    writer.writerow(["Net income", summary["net_income"]])
+    writer.writerow([])
+    writer.writerow(["Expense date", "Category", "Description", "Amount (GBP)"])
+    for expense in expenses:
+        writer.writerow([
+            expense.get("expense_date", ""),
+            expense.get("category", ""),
+            expense.get("description", ""),
+            expense.get("amount", 0),
+        ])
+    return output.getvalue()
 
 
 def build_timesheet_pdf(lessons, tutor, month: str) -> bytes:
@@ -775,14 +942,15 @@ class Handler(SimpleHTTPRequestHandler):
                 clauses.append("lr.student_id = ?")
                 params.append(query["student_id"][0])
             rate_columns = (
-                "s.hourly_rate AS student_rate, u.hourly_rate AS tutor_rate"
+                "COALESCE(lr.client_hourly_rate, s.hourly_rate) AS student_rate, COALESCE(lr.tutor_hourly_rate, u.hourly_rate) AS tutor_rate"
                 if user["role"] == "Master"
-                else "u.hourly_rate AS tutor_rate"
+                else "COALESCE(lr.tutor_hourly_rate, u.hourly_rate) AS tutor_rate"
             )
             with db() as conn:
                 lessons = rows(conn.execute(
                     f"""
-                    SELECT lr.*, b.start_at, b.duration_minutes, s.student_name, s.parent_email,
+                    SELECT lr.*, b.start_at, COALESCE(lr.duration_minutes, b.duration_minutes) AS duration_minutes,
+                           s.student_name, s.parent_email,
                            {rate_columns}, u.name AS tutor_name
                     FROM lesson_records lr
                     LEFT JOIN bookings b ON b.booking_id = lr.booking_id
@@ -812,8 +980,9 @@ class Handler(SimpleHTTPRequestHandler):
                 tutor = dict(tutor_record) if tutor_record else None
                 lessons = rows(conn.execute(
                     """
-                    SELECT lr.*, b.start_at, b.duration_minutes, s.student_name,
-                           u.hourly_rate AS tutor_rate, u.name AS tutor_name
+                    SELECT lr.*, b.start_at, COALESCE(lr.duration_minutes, b.duration_minutes) AS duration_minutes,
+                           s.student_name, COALESCE(lr.tutor_hourly_rate, u.hourly_rate) AS tutor_rate,
+                           u.name AS tutor_name
                     FROM lesson_records lr
                     LEFT JOIN bookings b ON b.booking_id = lr.booking_id
                     JOIN students s ON s.student_id = lr.student_id
@@ -838,6 +1007,71 @@ class Handler(SimpleHTTPRequestHandler):
                 )
             return self.send_json({"lessons": lessons})
 
+        if path == "/api/finance/summary":
+            if not self.require_master():
+                return
+            period = query.get("period", ["month"])[0].lower()
+            anchor_value = query.get("anchor", [date.today().isoformat()])[0]
+            try:
+                start_date, end_date = reporting_period(period, anchor_value)
+                anchor = date.fromisoformat(anchor_value)
+            except ValueError as error:
+                return self.send_json({"error": str(error)}, 400)
+            with db() as conn:
+                expenses = period_expenses(conn, start_date, end_date)
+                summary = calculate_finances(financial_lessons(conn, start_date, end_date), expenses)
+                vat_start = rolling_year_start(anchor)
+                rolling_turnover = calculate_finances(
+                    financial_lessons(conn, vat_start, anchor + timedelta(days=1)),
+                    [],
+                )["gross_income"]
+                rolling_series = []
+                current_month = anchor.replace(day=1)
+                for offset in range(-11, 1):
+                    point_month = shift_month(current_month, offset)
+                    point_end = anchor if offset == 0 else shift_month(point_month, 1) - timedelta(days=1)
+                    point_start = rolling_year_start(point_end)
+                    point_total = calculate_finances(
+                        financial_lessons(conn, point_start, point_end + timedelta(days=1)),
+                        [],
+                    )["gross_income"]
+                    rolling_series.append({"month": point_end.strftime("%Y-%m"), "turnover": point_total})
+            threshold = vat_threshold()
+            period_label = f"{start_date.strftime('%d %b %Y')} to {(end_date - timedelta(days=1)).strftime('%d %b %Y')}"
+            vat = {
+                "rolling_start": vat_start.isoformat(),
+                "rolling_end": anchor.isoformat(),
+                "turnover": rolling_turnover,
+                "threshold": threshold,
+                "headroom": round(threshold - rolling_turnover, 2),
+                "percent": round((rolling_turnover / threshold * 100) if threshold else 0, 1),
+                "over_threshold": rolling_turnover > threshold,
+                "series": rolling_series,
+            }
+            if query.get("format", [""])[0].lower() == "csv":
+                filename = f"swl-education-finance-{period}-{anchor.isoformat()}.csv"
+                return self.send_csv(filename, finance_csv(summary, expenses, period_label))
+            return self.send_json({
+                "period": period,
+                "period_label": period_label,
+                "summary": summary,
+                "expenses": expenses,
+                "vat": vat,
+            })
+
+        if path == "/api/expenses":
+            if not self.require_master():
+                return
+            period = query.get("period", ["month"])[0].lower()
+            anchor_value = query.get("anchor", [date.today().isoformat()])[0]
+            try:
+                start_date, end_date = reporting_period(period, anchor_value)
+            except ValueError as error:
+                return self.send_json({"error": str(error)}, 400)
+            with db() as conn:
+                expenses = period_expenses(conn, start_date, end_date)
+            return self.send_json({"expenses": expenses})
+
         if path == "/api/backup":
             if not self.require_master():
                 return
@@ -847,7 +1081,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if not DATABASE_URL and DB_PATH.exists():
                     archive.write(DB_PATH, "agency.sqlite3")
                 with db() as conn:
-                    for table in ("users", "students", "bookings", "lesson_records"):
+                    for table in ("users", "students", "bookings", "lesson_records", "expenses"):
                         archive.writestr(
                             f"{table}.json",
                             json.dumps(rows(conn.execute(f"SELECT * FROM {table}")), indent=2),
@@ -1058,6 +1292,10 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/students":
             if not self.require_master():
                 return
+            try:
+                parent_emails = normalize_email_list(payload.get("parent_email", ""))
+            except ValueError as error:
+                return self.send_json({"error": str(error)}, 400)
             with db() as conn:
                 conn.execute(
                     """
@@ -1069,7 +1307,7 @@ class Handler(SimpleHTTPRequestHandler):
                     (
                         payload["student_name"],
                         payload.get("parent_name", ""),
-                        payload.get("parent_email", ""),
+                        parent_emails,
                         payload.get("year_group", ""),
                         payload.get("target_school", ""),
                         int(payload["assigned_tutor_id"]) if payload.get("assigned_tutor_id") else None,
@@ -1091,6 +1329,10 @@ class Handler(SimpleHTTPRequestHandler):
             if not self.require_master():
                 return
             student_id = int(path.split("/")[3])
+            try:
+                parent_emails = normalize_email_list(payload.get("parent_email", ""))
+            except ValueError as error:
+                return self.send_json({"error": str(error)}, 400)
             with db() as conn:
                 conn.execute(
                     """
@@ -1102,7 +1344,7 @@ class Handler(SimpleHTTPRequestHandler):
                     (
                         payload["student_name"],
                         payload.get("parent_name", ""),
-                        payload.get("parent_email", ""),
+                        parent_emails,
                         payload.get("year_group", ""),
                         payload.get("target_school", ""),
                         int(payload["assigned_tutor_id"]) if payload.get("assigned_tutor_id") else None,
@@ -1111,6 +1353,76 @@ class Handler(SimpleHTTPRequestHandler):
                         student_id,
                     ),
                 )
+            return self.send_json({"ok": True})
+
+        if path.startswith("/api/students/") and path.endswith("/remove"):
+            if not self.require_master():
+                return
+            student_id = int(path.split("/")[3])
+            mode = payload.get("mode", "")
+            if mode not in {"unassign", "archive", "delete"}:
+                return self.send_json({"error": "Choose unassign, archive, or delete."}, 400)
+            with db() as conn:
+                student = conn.execute(
+                    "SELECT student_id, student_name FROM students WHERE student_id = ?",
+                    (student_id,),
+                ).fetchone()
+                if not student:
+                    return self.send_json({"error": "Student not found."}, 404)
+                counts = conn.execute(
+                    """
+                    SELECT
+                      (SELECT COUNT(*) FROM bookings WHERE student_id = ?) AS booking_count,
+                      (SELECT COUNT(*) FROM lesson_records WHERE student_id = ?) AS lesson_count
+                    """,
+                    (student_id, student_id),
+                ).fetchone()
+                if mode == "unassign":
+                    conn.execute("UPDATE students SET assigned_tutor_id = NULL WHERE student_id = ?", (student_id,))
+                elif mode == "archive":
+                    conn.execute("UPDATE students SET assigned_tutor_id = NULL, active = 0 WHERE student_id = ?", (student_id,))
+                else:
+                    conn.execute("DELETE FROM students WHERE student_id = ?", (student_id,))
+            return self.send_json({
+                "ok": True,
+                "mode": mode,
+                "deleted_bookings": counts["booking_count"] if mode == "delete" else 0,
+                "deleted_lesson_records": counts["lesson_count"] if mode == "delete" else 0,
+            })
+
+        if path == "/api/expenses":
+            if not self.require_master():
+                return
+            description = str(payload.get("description", "")).strip()
+            category = str(payload.get("category", "Other")).strip() or "Other"
+            try:
+                expense_date = date.fromisoformat(str(payload.get("expense_date", ""))).isoformat()
+                amount = round(float(payload.get("amount")), 2)
+            except (TypeError, ValueError):
+                return self.send_json({"error": "Enter a valid expense date and amount."}, 400)
+            if not description:
+                return self.send_json({"error": "Enter an expense description."}, 400)
+            if amount <= 0:
+                return self.send_json({"error": "Expense amount must be greater than zero."}, 400)
+            with db() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO expenses (expense_date, category, description, amount, created_by, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (expense_date, category, description, amount, user["user_id"], now_iso()),
+                )
+            return self.send_json({"ok": True})
+
+        if path.startswith("/api/expenses/") and path.endswith("/delete"):
+            if not self.require_master():
+                return
+            expense_id = int(path.split("/")[3])
+            with db() as conn:
+                existing = conn.execute("SELECT expense_id FROM expenses WHERE expense_id = ?", (expense_id,)).fetchone()
+                if not existing:
+                    return self.send_json({"error": "Expense not found."}, 404)
+                conn.execute("DELETE FROM expenses WHERE expense_id = ?", (expense_id,))
             return self.send_json({"ok": True})
 
         if path == "/api/bookings":
@@ -1122,6 +1434,14 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"error": "Choose one-off, 4, 8, 12, or 24 weeks."}, 400)
             start = datetime.fromisoformat(payload["start_at"])
             with db() as conn:
+                student = conn.execute(
+                    "SELECT student_id, assigned_tutor_id, active FROM students WHERE student_id = ?",
+                    (int(payload["student_id"]),),
+                ).fetchone()
+                if not student or not student["active"]:
+                    return self.send_json({"error": "Choose an active student for this booking."}, 400)
+                if user["role"] != "Master" and student["assigned_tutor_id"] != user["user_id"]:
+                    return self.send_json({"error": "Tutors can only book their assigned students."}, 403)
                 tutor = conn.execute(
                     "SELECT user_id FROM users WHERE user_id = ? AND role IN ('Master', 'Tutor') AND active = 1",
                     (tutor_id,),
@@ -1152,7 +1472,17 @@ class Handler(SimpleHTTPRequestHandler):
             booking_id = int(path.split("/")[3])
             wants_email = bool(payload.get("emailed_to_parent"))
             with db() as conn:
-                booking = conn.execute("SELECT * FROM bookings WHERE booking_id = ?", (booking_id,)).fetchone()
+                booking = conn.execute(
+                    """
+                    SELECT b.*, s.parent_email, s.student_name, s.hourly_rate AS client_hourly_rate,
+                           u.hourly_rate AS tutor_hourly_rate
+                    FROM bookings b
+                    JOIN students s ON s.student_id = b.student_id
+                    JOIN users u ON u.user_id = b.tutor_id
+                    WHERE b.booking_id = ?
+                    """,
+                    (booking_id,),
+                ).fetchone()
                 if not booking:
                     return self.send_json({"error": "Booking not found."}, 404)
                 if user["role"] != "Master" and booking["tutor_id"] != user["user_id"]:
@@ -1162,8 +1492,9 @@ class Handler(SimpleHTTPRequestHandler):
                     """
                     INSERT INTO lesson_records
                       (booking_id, student_id, tutor_id, completed_at, attendance_status, parent_summary,
-                       emailed_to_parent, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       emailed_to_parent, duration_minutes, client_hourly_rate, tutor_hourly_rate,
+                       created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(booking_id) DO UPDATE SET
                       completed_at = excluded.completed_at,
                       attendance_status = excluded.attendance_status,
@@ -1179,19 +1510,21 @@ class Handler(SimpleHTTPRequestHandler):
                         payload.get("attendance_status", "Completed"),
                         payload.get("parent_summary", ""),
                         0,
+                        booking["duration_minutes"],
+                        booking["client_hourly_rate"],
+                        booking["tutor_hourly_rate"],
                         now_iso(),
                         now_iso(),
                     ),
                 )
-                student = conn.execute("SELECT parent_email, student_name FROM students WHERE student_id = ?", (booking["student_id"],)).fetchone()
             email_sent = False
             email_error = ""
             message_id = ""
             if wants_email:
                 try:
                     message_id = send_lesson_email(
-                        student["parent_email"],
-                        student["student_name"],
+                        booking["parent_email"],
+                        booking["student_name"],
                         payload.get("parent_summary", ""),
                         user.get("email", ""),
                     )
@@ -1206,8 +1539,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(
                 {
                     "ok": True,
-                    "parent_email": student["parent_email"],
-                    "student_name": student["student_name"],
+                    "parent_email": booking["parent_email"],
+                    "student_name": booking["student_name"],
                     "email_sent": email_sent,
                     "email_error": email_error,
                     "postmark_message_id": message_id,

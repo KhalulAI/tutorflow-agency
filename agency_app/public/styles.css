@@ -373,6 +373,13 @@ nav {
   font-weight: 800;
 }
 
+.notice progress {
+  display: block;
+  width: min(100%, 520px);
+  height: 18px;
+  margin-top: 10px;
+}
+
 dialog {
   width: min(620px, calc(100% - 30px));
   border: 1px solid var(--line);
@@ -414,6 +421,7 @@ dialog form {
 .checkbox-line {
   display: flex;
   align-items: center;
+  gap: 10px;
 }
 
 .checkbox-line input { width: auto; }

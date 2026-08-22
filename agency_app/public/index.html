@@ -40,8 +40,10 @@
           <button class="tab master-only" type="button" data-tab="tutors">Tutors</button>
           <button class="tab" type="button" data-tab="students">Students</button>
           <button class="tab" type="button" data-tab="calendar">Calendar</button>
+          <button class="tab" type="button" data-tab="completed-lessons">Completed Lessons</button>
           <button class="tab" type="button" data-tab="timesheet">Timesheet</button>
           <button class="tab master-only" type="button" data-tab="reports">Reports</button>
+          <button class="tab master-only" type="button" data-tab="finance">Finance</button>
           <button class="tab" type="button" data-tab="settings">Settings</button>
         </nav>
       </aside>
@@ -55,11 +57,6 @@
         <section class="grid-two">
           <article class="panel"><h3>Upcoming Lessons</h3><div id="upcomingList" class="list"></div></article>
           <article class="panel"><h3>Lessons Needing Completion</h3><div id="completionList" class="list"></div></article>
-        </section>
-        <section class="panel">
-          <h3>Completed Lessons</h3>
-          <p>Review lessons and notes already recorded for the selected month.</p>
-          <div id="completedLessonList" class="list"></div>
         </section>
       </section>
 
@@ -85,7 +82,7 @@
             <h3>Add Student</h3>
             <label><span>Student name</span><input id="studentName" required></label>
             <label><span>Parent name</span><input id="parentName"></label>
-            <label><span>Parent email</span><input id="parentEmail" type="email"></label>
+            <label><span>Parent emails</span><input id="parentEmail" type="email" multiple placeholder="parent1@example.com, parent2@example.com"><small>Separate multiple addresses with commas.</small></label>
             <label><span>Year group</span><input id="yearGroup"></label>
             <label><span>Target school / notes</span><input id="targetSchool"></label>
             <label><span>Hourly rate</span><input id="studentRate" type="number" min="0" step="0.01"></label>
@@ -128,6 +125,26 @@
         </section>
       </section>
 
+      <section class="page" id="completed-lessons">
+        <header class="page-head">
+          <div><p class="eyebrow">Lesson History</p><h2>Completed Lessons &amp; Notes</h2></div>
+        </header>
+        <section class="panel">
+          <div class="toolbar">
+            <input id="completedMonth" type="month" aria-label="Completed lesson month">
+            <select id="completedSort" aria-label="Sort completed lessons">
+              <option value="date-desc">Date — newest first</option>
+              <option value="date-asc">Date — oldest first</option>
+              <option value="student-asc">Student — A to Z</option>
+              <option value="student-desc">Student — Z to A</option>
+            </select>
+            <button id="loadCompletedLessons" type="button">Refresh</button>
+          </div>
+          <div id="completedLessonSummary" class="notice"></div>
+          <div id="completedLessonList" class="list"></div>
+        </section>
+      </section>
+
       <section class="page" id="timesheet">
         <header class="page-head">
           <div><p class="eyebrow">Tutor</p><h2>Monthly Timesheet</h2></div>
@@ -162,6 +179,47 @@
         </section>
       </section>
 
+      <section class="page" id="finance">
+        <header class="page-head"><div><p class="eyebrow">Master Only</p><h2>Finance &amp; VAT Monitor</h2></div></header>
+        <section class="panel">
+          <div class="toolbar">
+            <select id="financePeriod" aria-label="Financial report period">
+              <option value="day">Day</option>
+              <option value="week">Week</option>
+              <option value="month" selected>Month</option>
+              <option value="year">Year</option>
+              <option value="ytd">Year to date</option>
+            </select>
+            <input id="financeAnchor" type="date" aria-label="Financial report date">
+            <button id="loadFinance" type="button">Load Finance Report</button>
+            <button id="downloadFinance" type="button">Download Finance CSV</button>
+          </div>
+          <p id="financePeriodLabel" class="muted-copy"></p>
+          <div id="financeStats" class="stat-grid"></div>
+        </section>
+        <section class="panel">
+          <h3>Rolling 12-Month VAT Turnover Monitor</h3>
+          <div id="vatSummary" class="notice"></div>
+          <div id="vatHistory" class="list"></div>
+          <p class="muted-copy">Planning aid only. It uses recorded gross lesson charges as a taxable-turnover proxy. Confirm the VAT treatment of your tuition services and registration position with your accountant.</p>
+        </section>
+        <section class="grid-two">
+          <form id="expenseForm" class="panel">
+            <h3>Save Expense</h3>
+            <label><span>Date</span><input id="expenseDate" type="date" required></label>
+            <label><span>Category</span><select id="expenseCategory">
+              <option>Software</option><option>Marketing</option><option>Insurance</option>
+              <option>Professional fees</option><option>Travel</option><option>Office</option><option>Other</option>
+            </select></label>
+            <label><span>Description</span><input id="expenseDescription" required></label>
+            <label><span>Amount</span><input id="expenseAmount" type="number" min="0.01" step="0.01" required></label>
+            <button type="submit">Save Expense</button>
+            <p id="expenseMessage" role="status"></p>
+          </form>
+          <article class="panel"><h3>Expenses in Selected Period</h3><div id="expenseList" class="list"></div></article>
+        </section>
+      </section>
+
       <section class="page" id="settings">
         <header class="page-head"><div><p class="eyebrow">Account</p><h2>Settings & Backup</h2></div></header>
         <section class="grid-two">
@@ -180,6 +238,25 @@
         </section>
       </section>
     </main>
+
+    <dialog id="studentRemovalDialog">
+      <form id="studentRemovalForm" method="dialog">
+        <div class="dialog-header">
+          <h2>Remove Student</h2>
+          <button class="dialog-close" type="button" id="closeStudentRemovalX" aria-label="Close" title="Close">&times;</button>
+        </div>
+        <p id="studentRemovalContext"></p>
+        <input id="studentRemovalId" type="hidden">
+        <label class="checkbox-line"><input type="radio" name="studentRemovalMode" value="unassign" checked> Unassign from tutor; keep the active student and all records</label>
+        <label class="checkbox-line"><input type="radio" name="studentRemovalMode" value="archive"> Archive from active use; retain all bookings and lesson records</label>
+        <label class="checkbox-line"><input type="radio" name="studentRemovalMode" value="delete"> Permanently delete the student and all associated records</label>
+        <p class="muted-copy">Permanent deletion cannot be undone. Archiving is recommended when records must be retained.</p>
+        <div class="dialog-actions">
+          <button id="cancelStudentRemoval" class="ghost dark-ghost" type="button">Cancel</button>
+          <button class="danger" type="submit">Apply</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="completeDialog">
       <form id="completeForm" method="dialog">

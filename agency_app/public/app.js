@@ -21,6 +21,10 @@ const els = {
   homeStats: $("#homeStats"),
   upcomingList: $("#upcomingList"),
   completionList: $("#completionList"),
+  completedMonth: $("#completedMonth"),
+  completedSort: $("#completedSort"),
+  loadCompletedLessons: $("#loadCompletedLessons"),
+  completedLessonSummary: $("#completedLessonSummary"),
   completedLessonList: $("#completedLessonList"),
   tutorForm: $("#tutorForm"),
   tutorName: $("#tutorName"),
@@ -73,6 +77,21 @@ const els = {
   loadReports: $("#loadReports"),
   downloadReports: $("#downloadReports"),
   reportList: $("#reportList"),
+  financePeriod: $("#financePeriod"),
+  financeAnchor: $("#financeAnchor"),
+  loadFinance: $("#loadFinance"),
+  downloadFinance: $("#downloadFinance"),
+  financePeriodLabel: $("#financePeriodLabel"),
+  financeStats: $("#financeStats"),
+  vatSummary: $("#vatSummary"),
+  vatHistory: $("#vatHistory"),
+  expenseForm: $("#expenseForm"),
+  expenseDate: $("#expenseDate"),
+  expenseCategory: $("#expenseCategory"),
+  expenseDescription: $("#expenseDescription"),
+  expenseAmount: $("#expenseAmount"),
+  expenseMessage: $("#expenseMessage"),
+  expenseList: $("#expenseList"),
   emailDraftPanel: $("#emailDraftPanel"),
   approveTimesheet: $("#approveTimesheet"),
   queryTimesheet: $("#queryTimesheet"),
@@ -97,6 +116,12 @@ const els = {
   completeBookingFromDialog: $("#completeBookingFromDialog"),
   cancelBookingButton: $("#cancelBookingButton"),
   deleteBookingButton: $("#deleteBookingButton"),
+  studentRemovalDialog: $("#studentRemovalDialog"),
+  studentRemovalForm: $("#studentRemovalForm"),
+  studentRemovalId: $("#studentRemovalId"),
+  studentRemovalContext: $("#studentRemovalContext"),
+  closeStudentRemovalX: $("#closeStudentRemovalX"),
+  cancelStudentRemoval: $("#cancelStudentRemoval"),
 };
 
 let currentUser = null;
@@ -161,8 +186,10 @@ function switchTab(tabName) {
   if (tabName === "tutors") renderTutors();
   if (tabName === "students") renderStudents();
   if (tabName === "calendar") loadCalendar();
+  if (tabName === "completed-lessons") loadCompletedLessons();
   if (tabName === "timesheet") loadTimesheet();
   if (tabName === "reports") loadReports();
+  if (tabName === "finance") loadFinance();
   if (tabName === "settings") renderSettings();
 }
 
@@ -177,8 +204,11 @@ function showApp(user) {
 async function start() {
   els.homeMonth.value = currentMonth();
   els.calendarMonth.value = currentMonth();
+  els.completedMonth.value = currentMonth();
   els.timesheetMonth.value = currentMonth();
   els.reportMonth.value = currentMonth();
+  els.financeAnchor.value = today();
+  els.expenseDate.value = today();
   els.bookingDate.value = today();
   els.bookingTime.value = "16:00";
 
@@ -216,10 +246,11 @@ function renderSelects() {
   els.reportTutor.innerHTML = `<option value="">All tutors</option>` + tutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
   if (!els.timesheetTutor.value && tutors[0]) els.timesheetTutor.value = tutors[0].user_id;
 
-  const studentOptions = `<option value="">Choose student</option>` + students.map((student) => `<option value="${student.student_id}">${escapeHtml(student.student_name)}</option>`).join("");
+  const activeStudents = students.filter((student) => student.active);
+  const studentOptions = `<option value="">Choose student</option>` + activeStudents.map((student) => `<option value="${student.student_id}">${escapeHtml(student.student_name)}</option>`).join("");
   els.bookingStudent.innerHTML = studentOptions;
   els.bookingEditStudent.innerHTML = studentOptions;
-  els.reportStudent.innerHTML = `<option value="">All students</option>` + students.map((student) => `<option value="${student.student_id}">${escapeHtml(student.student_name)}</option>`).join("");
+  els.reportStudent.innerHTML = `<option value="">All students</option>` + students.map((student) => `<option value="${student.student_id}">${escapeHtml(student.student_name)}${student.active ? "" : " (Archived)"}</option>`).join("");
   els.bookingEditTutor.innerHTML = tutorOptions;
 }
 
@@ -373,15 +404,17 @@ async function saveStudent(event) {
 function renderStudents() {
   els.studentList.innerHTML = students.length ? students.map((student) => `
     <article class="item" data-student-id="${student.student_id}">
-      <div class="item-head"><h4>${escapeHtml(student.student_name)}</h4><span class="pill">${escapeHtml(student.tutor_name || "Unassigned")}</span></div>
+      <div class="item-head"><h4>${escapeHtml(student.student_name)}</h4><span class="pill">${escapeHtml(student.active ? (student.tutor_name || "Unassigned") : "Archived")}</span></div>
       <p>${escapeHtml(student.parent_name || "No parent")} / ${escapeHtml(student.parent_email || "No email")}</p>
       <p>${escapeHtml(student.year_group || "No year group")} / ${escapeHtml(student.target_school || "No target")}${currentUser.role === "Master" ? ` / ${money(student.hourly_rate)} charged per hour` : ""}</p>
       ${currentUser.role === "Master" ? `<div class="button-row">
         <button type="button" data-edit-student="${student.student_id}">Edit Student</button>
+        <button class="${student.assigned_tutor_id ? "warn" : "ghost dark-ghost"}" type="button" data-remove-student="${student.student_id}">${student.assigned_tutor_id ? "Unassign / Remove" : "Remove Student"}</button>
       </div>` : ""}
     </article>
   `).join("") : `<div class="notice">No students yet.</div>`;
   $$("[data-edit-student]").forEach((button) => button.addEventListener("click", () => editStudent(Number(button.dataset.editStudent))));
+  $$("[data-remove-student]").forEach((button) => button.addEventListener("click", () => openStudentRemoval(Number(button.dataset.removeStudent))));
 }
 
 async function editStudent(studentId) {
@@ -391,7 +424,7 @@ async function editStudent(studentId) {
   if (student_name === null) return;
   const parent_name = prompt("Parent name", student.parent_name || "");
   if (parent_name === null) return;
-  const parent_email = prompt("Parent email", student.parent_email || "");
+  const parent_email = prompt("Parent emails (separate multiple addresses with commas)", student.parent_email || "");
   if (parent_email === null) return;
   const year_group = prompt("Year group", student.year_group || "");
   if (year_group === null) return;
@@ -406,6 +439,37 @@ async function editStudent(studentId) {
     method: "POST",
     body: JSON.stringify({ student_name, parent_name, parent_email, year_group, target_school, hourly_rate, assigned_tutor_id, active }),
   });
+  await refreshBaseData();
+  renderStudents();
+}
+
+function openStudentRemoval(studentId) {
+  const student = students.find((item) => Number(item.student_id) === Number(studentId));
+  if (!student) return;
+  els.studentRemovalId.value = studentId;
+  els.studentRemovalContext.textContent = `Choose what should happen to ${student.student_name}.`;
+  const defaultMode = student.assigned_tutor_id ? "unassign" : "archive";
+  const option = document.querySelector(`input[name="studentRemovalMode"][value="${defaultMode}"]`);
+  if (option) option.checked = true;
+  els.studentRemovalDialog.showModal();
+}
+
+async function removeStudent(event) {
+  event.preventDefault();
+  const studentId = Number(els.studentRemovalId.value);
+  const student = students.find((item) => Number(item.student_id) === studentId);
+  const selected = document.querySelector('input[name="studentRemovalMode"]:checked');
+  if (!student || !selected) return;
+  const mode = selected.value;
+  if (mode === "delete" && !confirm(`Permanently delete ${student.student_name}, including every booking and lesson note? This cannot be undone.`)) return;
+  const data = await api(`/api/students/${studentId}/remove`, {
+    method: "POST",
+    body: JSON.stringify({ mode }),
+  });
+  els.studentRemovalDialog.close();
+  if (mode === "delete") {
+    alert(`Student permanently deleted. ${data.deleted_bookings} booking(s) and ${data.deleted_lesson_records} lesson record(s) were removed.`);
+  }
   await refreshBaseData();
   renderStudents();
 }
@@ -579,8 +643,28 @@ async function loadHome() {
   `;
   els.upcomingList.innerHTML = upcoming.length ? upcoming.map(bookingItem).join("") : `<div class="notice">No upcoming lessons this month.</div>`;
   els.completionList.innerHTML = incomplete.length ? incomplete.map(bookingItem).join("") : `<div class="notice">No overdue lesson notes.</div>`;
-  els.completedLessonList.innerHTML = done.length ? done.map(completedLessonItem).join("") : `<div class="notice">No completed lessons recorded for this month.</div>`;
   $$("[data-open-calendar]").forEach((button) => button.addEventListener("click", () => switchTab("calendar")));
+}
+
+async function loadCompletedLessons() {
+  const data = await api(`/api/reports/lessons?month=${encodeURIComponent(els.completedMonth.value)}`);
+  const completedLessons = [...data.lessons];
+  const dateValue = (lesson) => new Date(lesson.start_at || lesson.completed_at || 0).getTime();
+  const studentValue = (lesson) => String(lesson.student_name || "");
+  const sort = els.completedSort.value;
+
+  completedLessons.sort((left, right) => {
+    if (sort === "date-asc") return dateValue(left) - dateValue(right);
+    if (sort === "student-asc") return studentValue(left).localeCompare(studentValue(right), "en-GB", { sensitivity: "base" }) || dateValue(right) - dateValue(left);
+    if (sort === "student-desc") return studentValue(right).localeCompare(studentValue(left), "en-GB", { sensitivity: "base" }) || dateValue(right) - dateValue(left);
+    return dateValue(right) - dateValue(left);
+  });
+
+  const lessonWord = completedLessons.length === 1 ? "lesson" : "lessons";
+  els.completedLessonSummary.textContent = `${completedLessons.length} completed ${lessonWord} for the selected month.`;
+  els.completedLessonList.innerHTML = completedLessons.length
+    ? completedLessons.map(completedLessonItem).join("")
+    : `<div class="notice">No completed lessons recorded for this month.</div>`;
 }
 
 function completedLessonItem(lesson) {
@@ -695,6 +779,76 @@ function downloadReports() {
   window.open(`/api/reports/lessons?${qs.toString()}`, "_blank");
 }
 
+function financeQuery(format = "") {
+  const qs = new URLSearchParams({
+    period: els.financePeriod.value,
+    anchor: els.financeAnchor.value,
+  });
+  if (format) qs.set("format", format);
+  return qs.toString();
+}
+
+async function loadFinance() {
+  if (currentUser.role !== "Master") return;
+  const data = await api(`/api/finance/summary?${financeQuery()}`);
+  const summary = data.summary;
+  const vat = data.vat;
+  els.financePeriodLabel.textContent = data.period_label;
+  els.financeStats.innerHTML = `
+    <article class="stat"><span class="eyebrow">Gross Income</span><strong>${money(summary.gross_income)}</strong><small>${summary.lesson_count} completed lessons</small></article>
+    <article class="stat"><span class="eyebrow">Tutor Costs</span><strong>${money(summary.tutor_costs)}</strong><small>Payable to tutors</small></article>
+    <article class="stat"><span class="eyebrow">Other Expenses</span><strong>${money(summary.expenses)}</strong><small>Saved in TutorFlow</small></article>
+    <article class="stat"><span class="eyebrow">Net Income</span><strong>${money(summary.net_income)}</strong><small>Income less tutor costs and expenses</small></article>
+  `;
+  const vatPosition = vat.over_threshold
+    ? `${money(Math.abs(vat.headroom))} above the configured threshold`
+    : `${money(vat.headroom)} remaining below the configured threshold`;
+  els.vatSummary.innerHTML = `
+    <strong>${money(vat.turnover)}</strong> rolling turnover from ${escapeHtml(vat.rolling_start)} to ${escapeHtml(vat.rolling_end)}.
+    ${escapeHtml(vatPosition)} (${vat.percent}%).
+    <progress max="100" value="${Math.min(Math.max(vat.percent, 0), 100)}" aria-label="VAT threshold usage"></progress>
+  `;
+  els.vatHistory.innerHTML = vat.series.map((point) => `
+    <article class="item"><div class="item-head"><h4>${escapeHtml(point.month)}</h4><strong>${money(point.turnover)}</strong></div></article>
+  `).join("");
+  els.expenseList.innerHTML = data.expenses.length ? data.expenses.map((expense) => `
+    <article class="item">
+      <div class="item-head"><h4>${escapeHtml(expense.description)}</h4><strong>${money(expense.amount)}</strong></div>
+      <p>${escapeHtml(expense.expense_date)} / ${escapeHtml(expense.category)}</p>
+      <button class="danger" type="button" data-delete-expense="${expense.expense_id}">Delete Expense</button>
+    </article>
+  `).join("") : `<div class="notice">No expenses saved for this period.</div>`;
+  $$("[data-delete-expense]").forEach((button) => button.addEventListener("click", () => deleteExpense(Number(button.dataset.deleteExpense))));
+}
+
+function downloadFinanceReport() {
+  window.open(`/api/finance/summary?${financeQuery("csv")}`, "_blank");
+}
+
+async function saveExpense(event) {
+  event.preventDefault();
+  els.expenseMessage.textContent = "Saving expense...";
+  await api("/api/expenses", {
+    method: "POST",
+    body: JSON.stringify({
+      expense_date: els.expenseDate.value,
+      category: els.expenseCategory.value,
+      description: els.expenseDescription.value,
+      amount: els.expenseAmount.value,
+    }),
+  });
+  els.expenseDescription.value = "";
+  els.expenseAmount.value = "";
+  els.expenseMessage.textContent = "Expense saved.";
+  await loadFinance();
+}
+
+async function deleteExpense(expenseId) {
+  if (!confirm("Delete this expense? This cannot be undone.")) return;
+  await api(`/api/expenses/${expenseId}/delete`, { method: "POST", body: "{}" });
+  await loadFinance();
+}
+
 function renderSettings() {
   els.passwordMessage.textContent = "";
 }
@@ -733,6 +887,9 @@ els.cancelBookingButton.addEventListener("click", cancelBooking);
 els.deleteBookingButton.addEventListener("click", deleteBooking);
 els.calendarMonth.addEventListener("change", loadCalendar);
 els.homeMonth.addEventListener("change", loadHome);
+els.completedMonth.addEventListener("change", loadCompletedLessons);
+els.completedSort.addEventListener("change", loadCompletedLessons);
+els.loadCompletedLessons.addEventListener("click", loadCompletedLessons);
 els.completeForm.addEventListener("submit", completeLesson);
 els.cancelComplete.addEventListener("click", () => els.completeDialog.close());
 els.closeCompleteDialogX.addEventListener("click", () => els.completeDialog.close());
@@ -746,6 +903,14 @@ els.approveTimesheet.addEventListener("click", () => setTimesheetStatus("Approve
 els.queryTimesheet.addEventListener("click", () => setTimesheetStatus("Queried"));
 els.loadReports.addEventListener("click", loadReports);
 els.downloadReports.addEventListener("click", downloadReports);
+els.financePeriod.addEventListener("change", loadFinance);
+els.financeAnchor.addEventListener("change", loadFinance);
+els.loadFinance.addEventListener("click", loadFinance);
+els.downloadFinance.addEventListener("click", downloadFinanceReport);
+els.expenseForm.addEventListener("submit", saveExpense);
+els.studentRemovalForm.addEventListener("submit", removeStudent);
+els.closeStudentRemovalX.addEventListener("click", () => els.studentRemovalDialog.close());
+els.cancelStudentRemoval.addEventListener("click", () => els.studentRemovalDialog.close());
 els.passwordForm.addEventListener("submit", changePassword);
 els.downloadBackup.addEventListener("click", downloadBackup);
 

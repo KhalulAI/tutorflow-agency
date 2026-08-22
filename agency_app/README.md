@@ -6,13 +6,16 @@ Railway with PostgreSQL. Parent lesson emails are sent through Postmark.
 ## Workflow
 
 - Master account creates tutor accounts.
-- Master adds students and assigns each student to a tutor.
+- Master adds students with one or more parent email addresses and assigns each student to a tutor.
+- Master can unassign, archive, or permanently delete a student and their records.
 - Master and tutors can add lessons to the shared calendar.
 - Master/tutors can edit or cancel lessons; master can permanently delete lessons.
 - Tutors complete lessons, write parent notes, and can send them through Postmark.
 - Tutors produce and submit monthly timesheets.
 - Master can approve/query timesheets.
 - Master can review lesson records by tutor, student, or month and export notes.
+- Master-only finance reports show gross income, tutor costs, expenses, net income,
+  and rolling 12-month turnover against a configurable VAT threshold.
 - Master can reset tutor passwords and download a database backup.
 
 ## Run
@@ -66,7 +69,12 @@ Optional:
 
 ```text
 POSTMARK_MESSAGE_STREAM=outbound
+VAT_THRESHOLD=90000
 ```
+
+`VAT_THRESHOLD` defaults to `90000` when omitted. The VAT display is a planning
+aid based on recorded gross lesson charges; confirm which supplies form taxable
+turnover with an accountant.
 
 `POSTMARK_FROM_EMAIL` must be a verified sender signature or belong to a
 verified sending domain in Postmark. For a non-delivering configuration test,
