@@ -233,6 +233,7 @@ class AgencyApiTests(unittest.TestCase):
                 "student_name": "Private Rate Student",
                 "parent_email": "parent@example.com",
                 "hourly_rate": 80,
+                "tutor_hourly_rate": 50,
                 "assigned_tutor_id": tutor["user_id"],
             },
         )
@@ -266,10 +267,12 @@ class AgencyApiTests(unittest.TestCase):
         )
         _, tutor_students = self.api("/api/students", opener=tutor_opener)
         self.assertNotIn("hourly_rate", tutor_students["students"][0])
+        self.assertNotIn("tutor_hourly_rate", tutor_students["students"][0])
+        self.assertEqual(tutor_students["students"][0]["tutor_rate"], 50)
         _, timesheet = self.api(
             f"/api/timesheet?month={start_at[:7]}", opener=tutor_opener
         )
-        self.assertEqual(timesheet["lessons"][0]["tutor_rate"], 40)
+        self.assertEqual(timesheet["lessons"][0]["tutor_rate"], 50)
         self.assertNotIn("student_rate", timesheet["lessons"][0])
         pdf_request = Request(
             self.base_url + f"/api/timesheet?month={start_at[:7]}&format=pdf",
@@ -281,16 +284,17 @@ class AgencyApiTests(unittest.TestCase):
         pdf_text = "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages)
         self.assertIn("SWL EDUCATION LTD", pdf_text)
         self.assertIn("Private Rate Tutor", pdf_text)
-        self.assertIn("GBP 40.00", pdf_text)
+        self.assertIn("GBP 50.00", pdf_text)
         self.assertNotIn("GBP 80.00", pdf_text)
         _, tutor_report = self.api(
             f"/api/reports/lessons?month={start_at[:7]}", opener=tutor_opener
         )
-        self.assertEqual(tutor_report["lessons"][0]["tutor_rate"], 40)
+        self.assertEqual(tutor_report["lessons"][0]["tutor_rate"], 50)
         self.assertNotIn("student_rate", tutor_report["lessons"][0])
 
         _, master_report = self.api(f"/api/reports/lessons?month={start_at[:7]}")
         self.assertEqual(master_report["lessons"][0]["student_rate"], 80)
+        self.assertEqual(master_report["lessons"][0]["tutor_rate"], 50)
 
         master_csv_request = Request(
             self.base_url + f"/api/reports/lessons?month={start_at[:7]}&format=csv",
@@ -300,8 +304,8 @@ class AgencyApiTests(unittest.TestCase):
             master_csv = response.read().decode("utf-8-sig")
             self.assertEqual(response.headers.get_content_type(), "text/csv")
         self.assertIn("Client Hourly Rate,Amount Charged,Tutor Hourly Rate,Tutor Pay,Agency Gross Margin", master_csv)
-        self.assertIn("80.0,80.0,40.0,40.0,40.0", master_csv)
-        self.assertIn("MONTH TOTAL,,,,,80.0,,40.0,40.0", master_csv)
+        self.assertIn("80.0,80.0,50.0,50.0,30.0", master_csv)
+        self.assertIn("MONTH TOTAL,,,,,80.0,,50.0,30.0", master_csv)
 
         tutor_csv_request = Request(
             self.base_url + f"/api/reports/lessons?month={start_at[:7]}&format=csv",
@@ -338,9 +342,13 @@ class AgencyApiTests(unittest.TestCase):
             {
                 "student_name": "Removal Student",
                 "assigned_tutor_id": tutor["user_id"],
+                "tutor_hourly_rate": 47,
                 "active": True,
             },
         )
+        _, reassigned = self.api("/api/students")
+        self.assertEqual(reassigned["students"][0]["assigned_tutor_id"], tutor["user_id"])
+        self.assertEqual(reassigned["students"][0]["tutor_hourly_rate"], 47)
         start_at = datetime.now().replace(day=18, hour=16, minute=0, second=0, microsecond=0).isoformat()
         self.api(
             "/api/bookings",

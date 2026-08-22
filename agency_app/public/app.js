@@ -39,6 +39,7 @@ const els = {
   yearGroup: $("#yearGroup"),
   targetSchool: $("#targetSchool"),
   studentRate: $("#studentRate"),
+  studentTutorRate: $("#studentTutorRate"),
   assignedTutor: $("#assignedTutor"),
   studentMessage: $("#studentMessage"),
   studentList: $("#studentList"),
@@ -122,6 +123,21 @@ const els = {
   studentRemovalContext: $("#studentRemovalContext"),
   closeStudentRemovalX: $("#closeStudentRemovalX"),
   cancelStudentRemoval: $("#cancelStudentRemoval"),
+  studentEditDialog: $("#studentEditDialog"),
+  studentEditForm: $("#studentEditForm"),
+  studentEditId: $("#studentEditId"),
+  studentEditName: $("#studentEditName"),
+  studentEditParentName: $("#studentEditParentName"),
+  studentEditParentEmail: $("#studentEditParentEmail"),
+  studentEditYearGroup: $("#studentEditYearGroup"),
+  studentEditTargetSchool: $("#studentEditTargetSchool"),
+  studentEditRate: $("#studentEditRate"),
+  studentEditTutorRate: $("#studentEditTutorRate"),
+  studentEditTutor: $("#studentEditTutor"),
+  studentEditActive: $("#studentEditActive"),
+  studentEditMessage: $("#studentEditMessage"),
+  closeStudentEditX: $("#closeStudentEditX"),
+  cancelStudentEdit: $("#cancelStudentEdit"),
 };
 
 let currentUser = null;
@@ -241,6 +257,7 @@ function renderSelects() {
   const activeTutors = tutors.filter((tutor) => tutor.active);
   const tutorOptions = `<option value="">Choose tutor</option>` + activeTutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
   els.assignedTutor.innerHTML = tutorOptions;
+  els.studentEditTutor.innerHTML = `<option value="">Unassigned</option>` + tutors.map((tutor) => `<option value="${tutor.user_id}" ${tutor.active ? "" : "disabled"}>${escapeHtml(tutor.name)}${tutor.active ? "" : " (Inactive)"}</option>`).join("");
   els.bookingTutor.innerHTML = tutorOptions;
   els.timesheetTutor.innerHTML = tutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
   els.reportTutor.innerHTML = `<option value="">All tutors</option>` + tutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
@@ -392,6 +409,7 @@ async function saveStudent(event) {
       year_group: els.yearGroup.value,
       target_school: els.targetSchool.value,
       hourly_rate: els.studentRate.value,
+      tutor_hourly_rate: els.studentTutorRate.value,
       assigned_tutor_id: els.assignedTutor.value,
     }),
   });
@@ -406,7 +424,10 @@ function renderStudents() {
     <article class="item" data-student-id="${student.student_id}">
       <div class="item-head"><h4>${escapeHtml(student.student_name)}</h4><span class="pill">${escapeHtml(student.active ? (student.tutor_name || "Unassigned") : "Archived")}</span></div>
       <p>${escapeHtml(student.parent_name || "No parent")} / ${escapeHtml(student.parent_email || "No email")}</p>
-      <p>${escapeHtml(student.year_group || "No year group")} / ${escapeHtml(student.target_school || "No target")}${currentUser.role === "Master" ? ` / ${money(student.hourly_rate)} charged per hour` : ""}</p>
+      <p>${escapeHtml(student.year_group || "No year group")} / ${escapeHtml(student.target_school || "No target")}</p>
+      ${currentUser.role === "Master"
+        ? `<p><strong>Client charge:</strong> ${money(student.hourly_rate)}/hour / <strong>Tutor pay:</strong> ${money(effectiveStudentTutorRate(student))}/hour${student.tutor_hourly_rate == null ? " (tutor default)" : " (student-specific)"}</p>`
+        : `<p><strong>Your rate:</strong> ${money(student.tutor_rate)}/hour</p>`}
       ${currentUser.role === "Master" ? `<div class="button-row">
         <button type="button" data-edit-student="${student.student_id}">Edit Student</button>
         <button class="${student.assigned_tutor_id ? "warn" : "ghost dark-ghost"}" type="button" data-remove-student="${student.student_id}">${student.assigned_tutor_id ? "Unassign / Remove" : "Remove Student"}</button>
@@ -417,30 +438,55 @@ function renderStudents() {
   $$("[data-remove-student]").forEach((button) => button.addEventListener("click", () => openStudentRemoval(Number(button.dataset.removeStudent))));
 }
 
-async function editStudent(studentId) {
+function effectiveStudentTutorRate(student) {
+  if (student.tutor_hourly_rate !== null && student.tutor_hourly_rate !== undefined && student.tutor_hourly_rate !== "") {
+    return Number(student.tutor_hourly_rate);
+  }
+  const assignedTutor = tutors.find((tutor) => Number(tutor.user_id) === Number(student.assigned_tutor_id));
+  return Number(assignedTutor?.hourly_rate || 0);
+}
+
+function editStudent(studentId) {
   const student = students.find((item) => Number(item.student_id) === Number(studentId));
   if (!student) return;
-  const student_name = prompt("Student name", student.student_name);
-  if (student_name === null) return;
-  const parent_name = prompt("Parent name", student.parent_name || "");
-  if (parent_name === null) return;
-  const parent_email = prompt("Parent emails (separate multiple addresses with commas)", student.parent_email || "");
-  if (parent_email === null) return;
-  const year_group = prompt("Year group", student.year_group || "");
-  if (year_group === null) return;
-  const target_school = prompt("Target school / notes", student.target_school || "");
-  if (target_school === null) return;
-  const hourly_rate = prompt("Hourly rate", student.hourly_rate || 0);
-  if (hourly_rate === null) return;
-  const assigned_tutor_id = prompt("Assigned tutor ID (leave blank for unassigned)", student.assigned_tutor_id || "");
-  if (assigned_tutor_id === null) return;
-  const active = confirm("Should this student be active?");
-  await api(`/api/students/${studentId}/update`, {
-    method: "POST",
-    body: JSON.stringify({ student_name, parent_name, parent_email, year_group, target_school, hourly_rate, assigned_tutor_id, active }),
-  });
-  await refreshBaseData();
-  renderStudents();
+  els.studentEditId.value = studentId;
+  els.studentEditName.value = student.student_name || "";
+  els.studentEditParentName.value = student.parent_name || "";
+  els.studentEditParentEmail.value = student.parent_email || "";
+  els.studentEditYearGroup.value = student.year_group || "";
+  els.studentEditTargetSchool.value = student.target_school || "";
+  els.studentEditRate.value = student.hourly_rate ?? 0;
+  els.studentEditTutorRate.value = student.tutor_hourly_rate ?? "";
+  els.studentEditTutor.value = student.assigned_tutor_id || "";
+  els.studentEditActive.checked = Boolean(student.active);
+  els.studentEditMessage.textContent = "";
+  els.studentEditDialog.showModal();
+}
+
+async function saveStudentEdit(event) {
+  event.preventDefault();
+  els.studentEditMessage.textContent = "Saving student...";
+  try {
+    await api(`/api/students/${els.studentEditId.value}/update`, {
+      method: "POST",
+      body: JSON.stringify({
+        student_name: els.studentEditName.value,
+        parent_name: els.studentEditParentName.value,
+        parent_email: els.studentEditParentEmail.value,
+        year_group: els.studentEditYearGroup.value,
+        target_school: els.studentEditTargetSchool.value,
+        hourly_rate: els.studentEditRate.value,
+        tutor_hourly_rate: els.studentEditTutorRate.value,
+        assigned_tutor_id: els.studentEditTutor.value,
+        active: els.studentEditActive.checked,
+      }),
+    });
+    els.studentEditDialog.close();
+    await refreshBaseData();
+    renderStudents();
+  } catch (error) {
+    els.studentEditMessage.textContent = error.message;
+  }
 }
 
 function openStudentRemoval(studentId) {
@@ -908,6 +954,9 @@ els.financeAnchor.addEventListener("change", loadFinance);
 els.loadFinance.addEventListener("click", loadFinance);
 els.downloadFinance.addEventListener("click", downloadFinanceReport);
 els.expenseForm.addEventListener("submit", saveExpense);
+els.studentEditForm.addEventListener("submit", saveStudentEdit);
+els.closeStudentEditX.addEventListener("click", () => els.studentEditDialog.close());
+els.cancelStudentEdit.addEventListener("click", () => els.studentEditDialog.close());
 els.studentRemovalForm.addEventListener("submit", removeStudent);
 els.closeStudentRemovalX.addEventListener("click", () => els.studentRemovalDialog.close());
 els.cancelStudentRemoval.addEventListener("click", () => els.studentRemovalDialog.close());

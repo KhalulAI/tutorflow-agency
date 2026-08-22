@@ -223,6 +223,7 @@ def init_db() -> None:
                 target_school TEXT NOT NULL DEFAULT '',
                 assigned_tutor_id INTEGER,
                 hourly_rate REAL NOT NULL DEFAULT 0,
+                tutor_hourly_rate REAL,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(assigned_tutor_id) REFERENCES users(user_id) ON DELETE SET NULL
@@ -277,6 +278,7 @@ def init_db() -> None:
         ensure_column(conn, "lesson_records", "duration_minutes", "INTEGER")
         ensure_column(conn, "lesson_records", "client_hourly_rate", "REAL")
         ensure_column(conn, "lesson_records", "tutor_hourly_rate", "REAL")
+        ensure_column(conn, "students", "tutor_hourly_rate", "REAL")
         conn.execute(
             """
             UPDATE lesson_records
@@ -422,7 +424,7 @@ def financial_lessons(conn, start_date: date, end_date: date):
         SELECT lr.completed_at,
                COALESCE(lr.duration_minutes, b.duration_minutes, 0) AS duration_minutes,
                COALESCE(lr.client_hourly_rate, s.hourly_rate, 0) AS student_rate,
-               COALESCE(lr.tutor_hourly_rate, u.hourly_rate, 0) AS tutor_rate
+               COALESCE(lr.tutor_hourly_rate, s.tutor_hourly_rate, u.hourly_rate, 0) AS tutor_rate
         FROM lesson_records lr
         LEFT JOIN bookings b ON b.booking_id = lr.booking_id
         JOIN students s ON s.student_id = lr.student_id
@@ -893,6 +895,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if user["role"] == "Master"
                 else """s.student_id, s.student_name, s.parent_name, s.parent_email,
                         s.year_group, s.target_school, s.assigned_tutor_id,
+                        COALESCE(s.tutor_hourly_rate, u.hourly_rate, 0) AS tutor_rate,
                         s.active, s.created_at"""
             )
             with db() as conn:
@@ -942,9 +945,9 @@ class Handler(SimpleHTTPRequestHandler):
                 clauses.append("lr.student_id = ?")
                 params.append(query["student_id"][0])
             rate_columns = (
-                "COALESCE(lr.client_hourly_rate, s.hourly_rate) AS student_rate, COALESCE(lr.tutor_hourly_rate, u.hourly_rate) AS tutor_rate"
+                "COALESCE(lr.client_hourly_rate, s.hourly_rate) AS student_rate, COALESCE(lr.tutor_hourly_rate, s.tutor_hourly_rate, u.hourly_rate) AS tutor_rate"
                 if user["role"] == "Master"
-                else "COALESCE(lr.tutor_hourly_rate, u.hourly_rate) AS tutor_rate"
+                else "COALESCE(lr.tutor_hourly_rate, s.tutor_hourly_rate, u.hourly_rate) AS tutor_rate"
             )
             with db() as conn:
                 lessons = rows(conn.execute(
@@ -981,7 +984,7 @@ class Handler(SimpleHTTPRequestHandler):
                 lessons = rows(conn.execute(
                     """
                     SELECT lr.*, b.start_at, COALESCE(lr.duration_minutes, b.duration_minutes) AS duration_minutes,
-                           s.student_name, COALESCE(lr.tutor_hourly_rate, u.hourly_rate) AS tutor_rate,
+                           s.student_name, COALESCE(lr.tutor_hourly_rate, s.tutor_hourly_rate, u.hourly_rate) AS tutor_rate,
                            u.name AS tutor_name
                     FROM lesson_records lr
                     LEFT JOIN bookings b ON b.booking_id = lr.booking_id
@@ -1015,7 +1018,7 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 start_date, end_date = reporting_period(period, anchor_value)
                 anchor = date.fromisoformat(anchor_value)
-            except ValueError as error:
+            except (TypeError, ValueError) as error:
                 return self.send_json({"error": str(error)}, 400)
             with db() as conn:
                 expenses = period_expenses(conn, start_date, end_date)
@@ -1066,7 +1069,7 @@ class Handler(SimpleHTTPRequestHandler):
             anchor_value = query.get("anchor", [date.today().isoformat()])[0]
             try:
                 start_date, end_date = reporting_period(period, anchor_value)
-            except ValueError as error:
+            except (TypeError, ValueError) as error:
                 return self.send_json({"error": str(error)}, 400)
             with db() as conn:
                 expenses = period_expenses(conn, start_date, end_date)
@@ -1294,15 +1297,25 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             try:
                 parent_emails = normalize_email_list(payload.get("parent_email", ""))
-            except ValueError as error:
+                client_rate = float(payload.get("hourly_rate") or 0)
+                tutor_rate = float(payload["tutor_hourly_rate"]) if payload.get("tutor_hourly_rate") not in (None, "") else None
+            except (TypeError, ValueError) as error:
                 return self.send_json({"error": str(error)}, 400)
+            if client_rate < 0 or (tutor_rate is not None and tutor_rate < 0):
+                return self.send_json({"error": "Hourly rates cannot be negative."}, 400)
+            assigned_tutor_id = int(payload["assigned_tutor_id"]) if payload.get("assigned_tutor_id") else None
             with db() as conn:
+                if assigned_tutor_id and not conn.execute(
+                    "SELECT user_id FROM users WHERE user_id = ? AND role = 'Tutor' AND active = 1",
+                    (assigned_tutor_id,),
+                ).fetchone():
+                    return self.send_json({"error": "Choose an active tutor or leave the student unassigned."}, 400)
                 conn.execute(
                     """
                     INSERT INTO students
                       (student_name, parent_name, parent_email, year_group, target_school,
-                       assigned_tutor_id, hourly_rate, active, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                       assigned_tutor_id, hourly_rate, tutor_hourly_rate, active, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
                     """,
                     (
                         payload["student_name"],
@@ -1310,8 +1323,9 @@ class Handler(SimpleHTTPRequestHandler):
                         parent_emails,
                         payload.get("year_group", ""),
                         payload.get("target_school", ""),
-                        int(payload["assigned_tutor_id"]) if payload.get("assigned_tutor_id") else None,
-                        float(payload.get("hourly_rate") or 0),
+                        assigned_tutor_id,
+                        client_rate,
+                        tutor_rate,
                         now_iso(),
                     ),
                 )
@@ -1331,14 +1345,25 @@ class Handler(SimpleHTTPRequestHandler):
             student_id = int(path.split("/")[3])
             try:
                 parent_emails = normalize_email_list(payload.get("parent_email", ""))
-            except ValueError as error:
+                client_rate = float(payload.get("hourly_rate") or 0)
+                tutor_rate = float(payload["tutor_hourly_rate"]) if payload.get("tutor_hourly_rate") not in (None, "") else None
+            except (TypeError, ValueError) as error:
                 return self.send_json({"error": str(error)}, 400)
+            if client_rate < 0 or (tutor_rate is not None and tutor_rate < 0):
+                return self.send_json({"error": "Hourly rates cannot be negative."}, 400)
+            assigned_tutor_id = int(payload["assigned_tutor_id"]) if payload.get("assigned_tutor_id") else None
             with db() as conn:
+                if assigned_tutor_id and not conn.execute(
+                    "SELECT user_id FROM users WHERE user_id = ? AND role = 'Tutor' AND active = 1",
+                    (assigned_tutor_id,),
+                ).fetchone():
+                    return self.send_json({"error": "Choose an active tutor or leave the student unassigned."}, 400)
                 conn.execute(
                     """
                     UPDATE students
                     SET student_name = ?, parent_name = ?, parent_email = ?, year_group = ?,
-                        target_school = ?, assigned_tutor_id = ?, hourly_rate = ?, active = ?
+                        target_school = ?, assigned_tutor_id = ?, hourly_rate = ?,
+                        tutor_hourly_rate = ?, active = ?
                     WHERE student_id = ?
                     """,
                     (
@@ -1347,8 +1372,9 @@ class Handler(SimpleHTTPRequestHandler):
                         parent_emails,
                         payload.get("year_group", ""),
                         payload.get("target_school", ""),
-                        int(payload["assigned_tutor_id"]) if payload.get("assigned_tutor_id") else None,
-                        float(payload.get("hourly_rate") or 0),
+                        assigned_tutor_id,
+                        client_rate,
+                        tutor_rate,
                         1 if payload.get("active", True) else 0,
                         student_id,
                     ),
@@ -1475,7 +1501,7 @@ class Handler(SimpleHTTPRequestHandler):
                 booking = conn.execute(
                     """
                     SELECT b.*, s.parent_email, s.student_name, s.hourly_rate AS client_hourly_rate,
-                           u.hourly_rate AS tutor_hourly_rate
+                           COALESCE(s.tutor_hourly_rate, u.hourly_rate) AS tutor_hourly_rate
                     FROM bookings b
                     JOIN students s ON s.student_id = b.student_id
                     JOIN users u ON u.user_id = b.tutor_id

@@ -85,7 +85,8 @@
             <label><span>Parent emails</span><input id="parentEmail" type="email" multiple placeholder="parent1@example.com, parent2@example.com"><small>Separate multiple addresses with commas.</small></label>
             <label><span>Year group</span><input id="yearGroup"></label>
             <label><span>Target school / notes</span><input id="targetSchool"></label>
-            <label><span>Hourly rate</span><input id="studentRate" type="number" min="0" step="0.01"></label>
+            <label><span>Client hourly charge</span><input id="studentRate" type="number" min="0" step="0.01"></label>
+            <label><span>Tutor hourly rate for this student</span><input id="studentTutorRate" type="number" min="0" step="0.01" placeholder="Leave blank to use tutor default"><small>This overrides the tutor's overall rate for this student only.</small></label>
             <label><span>Assigned tutor</span><select id="assignedTutor"></select></label>
             <button type="submit">Save Student</button>
             <p id="studentMessage" role="status"></p>
@@ -238,6 +239,30 @@
         </section>
       </section>
     </main>
+
+    <dialog id="studentEditDialog">
+      <form id="studentEditForm" method="dialog">
+        <div class="dialog-header">
+          <h2>Edit Student</h2>
+          <button class="dialog-close" type="button" id="closeStudentEditX" aria-label="Close" title="Close">&times;</button>
+        </div>
+        <input id="studentEditId" type="hidden">
+        <label><span>Student name</span><input id="studentEditName" required></label>
+        <label><span>Parent name</span><input id="studentEditParentName"></label>
+        <label><span>Parent emails</span><input id="studentEditParentEmail" type="email" multiple><small>Separate multiple addresses with commas.</small></label>
+        <label><span>Year group</span><input id="studentEditYearGroup"></label>
+        <label><span>Target school / notes</span><input id="studentEditTargetSchool"></label>
+        <label><span>Client hourly charge</span><input id="studentEditRate" type="number" min="0" step="0.01"></label>
+        <label><span>Tutor hourly rate for this student</span><input id="studentEditTutorRate" type="number" min="0" step="0.01" placeholder="Leave blank to use tutor default"><small>This overrides the selected tutor's overall rate for this student only.</small></label>
+        <label><span>Assigned tutor</span><select id="studentEditTutor"></select></label>
+        <label class="checkbox-line"><input id="studentEditActive" type="checkbox"> Active student</label>
+        <div class="dialog-actions">
+          <button id="cancelStudentEdit" class="ghost dark-ghost" type="button">Cancel</button>
+          <button type="submit">Save Student</button>
+        </div>
+        <p id="studentEditMessage" role="status"></p>
+      </form>
+    </dialog>
 
     <dialog id="studentRemovalDialog">
       <form id="studentRemovalForm" method="dialog">
