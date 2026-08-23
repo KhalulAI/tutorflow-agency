@@ -24,7 +24,24 @@
           <label><span>Email</span><input id="loginEmail" type="email" required></label>
           <label><span>Password</span><input id="loginPassword" type="password" required></label>
           <button type="submit">Sign In</button>
+          <button id="showPasswordReset" class="ghost dark-ghost" type="button">Forgot password?</button>
           <p id="loginMessage" role="status"></p>
+        </form>
+        <form id="passwordResetRequestForm" hidden>
+          <h2>Reset password</h2>
+          <p>Enter the email used for your TutorFlow account.</p>
+          <label><span>Email</span><input id="passwordResetEmail" type="email" required></label>
+          <button type="submit">Email Reset Link</button>
+          <button id="cancelPasswordResetRequest" class="ghost dark-ghost" type="button">Back to Sign In</button>
+          <p id="passwordResetRequestMessage" role="status"></p>
+        </form>
+        <form id="passwordResetCompleteForm" hidden>
+          <h2>Choose a new password</h2>
+          <input id="passwordResetToken" type="hidden">
+          <label><span>New password</span><input id="passwordResetNew" type="password" minlength="10" required></label>
+          <label><span>Confirm new password</span><input id="passwordResetConfirm" type="password" minlength="10" required></label>
+          <button type="submit">Save New Password</button>
+          <p id="passwordResetCompleteMessage" role="status"></p>
         </form>
       </section>
     </main>
@@ -132,12 +149,24 @@
         </header>
         <section class="panel">
           <div class="toolbar">
+            <select id="completedPeriod" aria-label="Completed lesson period">
+              <option value="month">Month</option>
+              <option value="day">Day</option>
+              <option value="range">Date range</option>
+            </select>
             <input id="completedMonth" type="month" aria-label="Completed lesson month">
+            <input id="completedDay" type="date" aria-label="Completed lesson day" hidden>
+            <input id="completedStart" type="date" aria-label="Completed lesson start date" hidden>
+            <input id="completedEnd" type="date" aria-label="Completed lesson end date" hidden>
+            <select id="completedTutor" class="master-only" aria-label="Filter completed lessons by tutor"></select>
+            <select id="completedStudent" class="master-only" aria-label="Filter completed lessons by student"></select>
             <select id="completedSort" aria-label="Sort completed lessons">
               <option value="date-desc">Date — newest first</option>
               <option value="date-asc">Date — oldest first</option>
               <option value="student-asc">Student — A to Z</option>
               <option value="student-desc">Student — Z to A</option>
+              <option value="tutor-asc">Tutor — A to Z</option>
+              <option value="tutor-desc">Tutor — Z to A</option>
             </select>
             <button id="loadCompletedLessons" type="button">Refresh</button>
           </div>
@@ -201,7 +230,7 @@
         <section class="panel">
           <h3>Rolling 12-Month VAT Turnover Monitor</h3>
           <div id="vatSummary" class="notice"></div>
-          <div id="vatHistory" class="list"></div>
+          <div id="vatHistory" class="vat-chart" aria-label="Rolling 12-month turnover by month"></div>
           <p class="muted-copy">Planning aid only. It uses recorded gross lesson charges as a taxable-turnover proxy. Confirm the VAT treatment of your tuition services and registration position with your accountant.</p>
         </section>
         <section class="grid-two">
