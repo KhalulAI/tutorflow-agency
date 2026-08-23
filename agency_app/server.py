@@ -214,6 +214,15 @@ def init_db() -> None:
                 FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                token_hash TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                expires_at TEXT NOT NULL,
+                used_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS students (
                 student_id {primary_key},
                 student_name TEXT NOT NULL,
@@ -401,6 +410,24 @@ If you were not expecting this email, contact your agency administrator.
     return send_postmark_email(recipient, subject, body, reply_to)
 
 
+def send_password_reset_email(recipient: str, account_name: str, reset_token: str) -> str:
+    reset_url = f"{app_url()}/?reset_token={reset_token}"
+    body = f"""Hello {account_name},
+
+A password reset was requested for your TutorFlow Agency account.
+
+Choose a new password using this link:
+{reset_url}
+
+The link expires in one hour and can only be used once. If you did not request
+this reset, you can ignore this email and your current password will continue to work.
+
+Kind regards,
+SWL Education Ltd
+"""
+    return send_postmark_email(recipient, "Reset your TutorFlow password", body)
+
+
 def query_period(query):
     month = query.get("month", [""])[0]
     start = query.get("start", [""])[0]
@@ -411,7 +438,11 @@ def query_period(query):
         end_dt = datetime(year + (month_num == 12), 1 if month_num == 12 else month_num + 1, 1)
         return start_dt.isoformat(), end_dt.isoformat()
     if start and end:
-        return f"{start}T00:00:00", f"{end}T23:59:59"
+        start_date = date.fromisoformat(start)
+        end_date = date.fromisoformat(end)
+        if end_date < start_date:
+            raise ValueError("The end date cannot be before the start date.")
+        return f"{start_date.isoformat()}T00:00:00", f"{(end_date + timedelta(days=1)).isoformat()}T00:00:00"
     today = datetime.now()
     start_dt = datetime(today.year, today.month, 1)
     end_dt = datetime(today.year + (today.month == 12), 1 if today.month == 12 else today.month + 1, 1)
@@ -932,7 +963,10 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"bookings": bookings})
 
         if path == "/api/reports/lessons":
-            start, end = query_period(query)
+            try:
+                start, end = query_period(query)
+            except ValueError as error:
+                return self.send_json({"error": str(error)}, 400)
             clauses = ["lr.completed_at >= ?", "lr.completed_at < ?"]
             params = [start, end]
             if user["role"] != "Master":
@@ -1122,6 +1156,57 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"user": user}).encode("utf-8"))
             return
+
+        if path == "/api/password-reset/request":
+            email = str(payload.get("email", "")).strip().lower()
+            generic_message = "If an active TutorFlow account uses that email, a reset link has been sent."
+            with db() as conn:
+                account = conn.execute(
+                    "SELECT user_id, name, email FROM users WHERE email = ? AND active = 1",
+                    (email,),
+                ).fetchone()
+                if account:
+                    reset_token = secrets.token_urlsafe(32)
+                    token_hash = hashlib.sha256(reset_token.encode("utf-8")).hexdigest()
+                    created_at = now_iso()
+                    expires_at = (datetime.now() + timedelta(hours=1)).replace(microsecond=0).isoformat()
+                    conn.execute("DELETE FROM password_reset_tokens WHERE user_id = ?", (account["user_id"],))
+                    conn.execute(
+                        "INSERT INTO password_reset_tokens (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+                        (token_hash, account["user_id"], expires_at, created_at),
+                    )
+            if account:
+                try:
+                    send_password_reset_email(account["email"], account["name"], reset_token)
+                except (RuntimeError, ValueError) as error:
+                    print(f"Password reset email failed for user {account['user_id']}: {error}", flush=True)
+                    with db() as conn:
+                        conn.execute("DELETE FROM password_reset_tokens WHERE token_hash = ?", (token_hash,))
+            return self.send_json({"ok": True, "message": generic_message})
+
+        if path == "/api/password-reset/complete":
+            reset_token = str(payload.get("token", ""))
+            new_password = str(payload.get("new_password", ""))
+            if len(new_password) < 10:
+                return self.send_json({"error": "Use a password containing at least 10 characters."}, 400)
+            token_hash = hashlib.sha256(reset_token.encode("utf-8")).hexdigest()
+            with db() as conn:
+                token_record = conn.execute(
+                    "SELECT token_hash, user_id, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ?",
+                    (token_hash,),
+                ).fetchone()
+                if not token_record or token_record["used_at"] or datetime.fromisoformat(token_record["expires_at"]) < datetime.now():
+                    return self.send_json({"error": "This password reset link is invalid or has expired."}, 400)
+                conn.execute(
+                    "UPDATE users SET password_hash = ? WHERE user_id = ?",
+                    (hash_password(new_password), token_record["user_id"]),
+                )
+                conn.execute(
+                    "UPDATE password_reset_tokens SET used_at = ? WHERE token_hash = ?",
+                    (now_iso(), token_hash),
+                )
+                conn.execute("DELETE FROM sessions WHERE user_id = ?", (token_record["user_id"],))
+            return self.send_json({"ok": True})
 
         user = self.require_user()
         if not user:

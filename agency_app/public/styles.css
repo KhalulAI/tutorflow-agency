@@ -380,6 +380,47 @@ nav {
   margin-top: 10px;
 }
 
+.vat-chart {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(52px, 1fr));
+  gap: 10px;
+  align-items: end;
+  min-height: 290px;
+  margin-top: 18px;
+  overflow-x: auto;
+  padding: 12px 4px 4px;
+}
+
+.vat-bar-column {
+  display: grid;
+  grid-template-rows: auto 190px auto;
+  gap: 7px;
+  min-width: 52px;
+  text-align: center;
+}
+
+.vat-bar-value,
+.vat-bar-month {
+  color: var(--green);
+  font-size: .72rem;
+  font-weight: 800;
+}
+
+.vat-bar-track {
+  display: flex;
+  align-items: end;
+  height: 190px;
+  border-bottom: 2px solid var(--line);
+  background: linear-gradient(to top, color-mix(in srgb, var(--teal) 5%, transparent), transparent);
+}
+
+.vat-bar {
+  width: 100%;
+  min-height: 3px;
+  border-radius: 5px 5px 0 0;
+  background: linear-gradient(to top, var(--green), var(--teal));
+}
+
 dialog {
   width: min(620px, calc(100% - 30px));
   border: 1px solid var(--line);
@@ -447,5 +488,6 @@ body.tutor .master-booking-field {
   .grid-two, .calendar-layout { grid-template-columns: 1fr; }
   .booking-panel { grid-template-columns: 1fr; }
   .stat-grid { grid-template-columns: 1fr 1fr; }
+  .vat-chart { grid-template-columns: repeat(12, 64px); }
   .calendar-grid { grid-template-columns: repeat(2, 1fr); }
 }

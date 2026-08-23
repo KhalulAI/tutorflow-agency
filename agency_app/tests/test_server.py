@@ -21,6 +21,7 @@ class AgencyApiTests(unittest.TestCase):
         self.original_db_path = server.DB_PATH
         self.original_send_email = server.send_lesson_email
         self.original_send_credentials = server.send_tutor_credentials_email
+        self.original_send_password_reset = server.send_password_reset_email
         server.DB_PATH = Path(self.temp_dir.name) / "agency.sqlite3"
         server.init_db()
         self.httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
@@ -36,6 +37,7 @@ class AgencyApiTests(unittest.TestCase):
         server.DB_PATH = self.original_db_path
         server.send_lesson_email = self.original_send_email
         server.send_tutor_credentials_email = self.original_send_credentials
+        server.send_password_reset_email = self.original_send_password_reset
         self.temp_dir.cleanup()
 
     def api(self, path, method="GET", body=None, opener=None):
@@ -185,6 +187,59 @@ class AgencyApiTests(unittest.TestCase):
         _, students = self.api("/api/students")
         self.assertIsNone(students["students"][0]["assigned_tutor_id"])
 
+    def test_tutor_can_reset_a_forgotten_password_by_emailed_link(self):
+        self.login_as_master()
+        _, created = self.api(
+            "/api/users",
+            "POST",
+            {"name": "Reset Link Tutor", "email": "reset-link@example.com", "hourly_rate": 40},
+        )
+        reset_messages = []
+
+        def fake_reset_email(recipient, account_name, reset_token):
+            reset_messages.append((recipient, account_name, reset_token))
+            return "reset-message-id"
+
+        server.send_password_reset_email = fake_reset_email
+        _, requested = self.api(
+            "/api/password-reset/request",
+            "POST",
+            {"email": "reset-link@example.com"},
+        )
+        self.assertTrue(requested["ok"])
+        self.assertEqual(reset_messages[0][0], "reset-link@example.com")
+        reset_token = reset_messages[0][2]
+
+        self.api(
+            "/api/password-reset/complete",
+            "POST",
+            {"token": reset_token, "new_password": "new-password-123"},
+        )
+        tutor_opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        status, login = self.api(
+            "/api/login",
+            "POST",
+            {"email": "reset-link@example.com", "password": "new-password-123"},
+            opener=tutor_opener,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(login["user"]["role"], "Tutor")
+        with self.assertRaises(HTTPError) as reused:
+            self.api(
+                "/api/password-reset/complete",
+                "POST",
+                {"token": reset_token, "new_password": "another-password-123"},
+            )
+        self.assertEqual(reused.exception.code, 400)
+
+        _, unknown = self.api(
+            "/api/password-reset/request",
+            "POST",
+            {"email": "unknown@example.com"},
+        )
+        self.assertEqual(unknown["message"], requested["message"])
+        self.assertEqual(len(reset_messages), 1)
+
     def test_tutor_with_booking_history_cannot_be_removed(self):
         self.login_as_master()
         self.api(
@@ -295,6 +350,14 @@ class AgencyApiTests(unittest.TestCase):
         _, master_report = self.api(f"/api/reports/lessons?month={start_at[:7]}")
         self.assertEqual(master_report["lessons"][0]["student_rate"], 80)
         self.assertEqual(master_report["lessons"][0]["tutor_rate"], 50)
+        _, filtered_report = self.api(
+            f"/api/reports/lessons?start={start_at[:10]}&end={start_at[:10]}&tutor_id={tutor['user_id']}&student_id={student_id}"
+        )
+        self.assertEqual(len(filtered_report["lessons"]), 1)
+        _, empty_filtered_report = self.api(
+            f"/api/reports/lessons?start={start_at[:10]}&end={start_at[:10]}&tutor_id=999999"
+        )
+        self.assertEqual(empty_filtered_report["lessons"], [])
 
         master_csv_request = Request(
             self.base_url + f"/api/reports/lessons?month={start_at[:7]}&format=csv",

@@ -14,8 +14,10 @@ Railway with PostgreSQL. Parent lesson emails are sent through Postmark.
 - Tutors produce and submit monthly timesheets.
 - Master can approve/query timesheets.
 - Master can review lesson records by tutor, student, or month and export notes.
+- Completed lessons can be filtered by tutor, student, month, day, or date range.
 - Master-only finance reports show gross income, tutor costs, expenses, net income,
-  and rolling 12-month turnover against a configurable VAT threshold.
+  and a rolling 12-month turnover bar chart against a configurable VAT threshold.
+- Tutors can request a secure, one-hour password-reset link from the sign-in screen.
 - Master can reset tutor passwords and download a database backup.
 
 ## Run

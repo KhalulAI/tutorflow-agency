@@ -13,6 +13,16 @@ const els = {
   loginEmail: $("#loginEmail"),
   loginPassword: $("#loginPassword"),
   loginMessage: $("#loginMessage"),
+  showPasswordReset: $("#showPasswordReset"),
+  passwordResetRequestForm: $("#passwordResetRequestForm"),
+  passwordResetEmail: $("#passwordResetEmail"),
+  passwordResetRequestMessage: $("#passwordResetRequestMessage"),
+  cancelPasswordResetRequest: $("#cancelPasswordResetRequest"),
+  passwordResetCompleteForm: $("#passwordResetCompleteForm"),
+  passwordResetToken: $("#passwordResetToken"),
+  passwordResetNew: $("#passwordResetNew"),
+  passwordResetConfirm: $("#passwordResetConfirm"),
+  passwordResetCompleteMessage: $("#passwordResetCompleteMessage"),
   logoutButton: $("#logoutButton"),
   userBadge: $("#userBadge"),
   tabs: $$(".tab"),
@@ -21,7 +31,13 @@ const els = {
   homeStats: $("#homeStats"),
   upcomingList: $("#upcomingList"),
   completionList: $("#completionList"),
+  completedPeriod: $("#completedPeriod"),
   completedMonth: $("#completedMonth"),
+  completedDay: $("#completedDay"),
+  completedStart: $("#completedStart"),
+  completedEnd: $("#completedEnd"),
+  completedTutor: $("#completedTutor"),
+  completedStudent: $("#completedStudent"),
   completedSort: $("#completedSort"),
   loadCompletedLessons: $("#loadCompletedLessons"),
   completedLessonSummary: $("#completedLessonSummary"),
@@ -221,12 +237,23 @@ async function start() {
   els.homeMonth.value = currentMonth();
   els.calendarMonth.value = currentMonth();
   els.completedMonth.value = currentMonth();
+  els.completedDay.value = today();
+  els.completedStart.value = `${currentMonth()}-01`;
+  els.completedEnd.value = today();
   els.timesheetMonth.value = currentMonth();
   els.reportMonth.value = currentMonth();
   els.financeAnchor.value = today();
   els.expenseDate.value = today();
   els.bookingDate.value = today();
   els.bookingTime.value = "16:00";
+  updateCompletedPeriodFields();
+
+  const resetToken = new URLSearchParams(location.search).get("reset_token");
+  if (resetToken) {
+    els.passwordResetToken.value = resetToken;
+    els.passwordResetCompleteForm.hidden = false;
+    return;
+  }
 
   const setup = await api("/api/setup-status");
   if (!setup.has_master) {
@@ -261,6 +288,7 @@ function renderSelects() {
   els.bookingTutor.innerHTML = tutorOptions;
   els.timesheetTutor.innerHTML = tutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
   els.reportTutor.innerHTML = `<option value="">All tutors</option>` + tutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
+  els.completedTutor.innerHTML = `<option value="">All tutors</option>` + tutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
   if (!els.timesheetTutor.value && tutors[0]) els.timesheetTutor.value = tutors[0].user_id;
 
   const activeStudents = students.filter((student) => student.active);
@@ -268,6 +296,7 @@ function renderSelects() {
   els.bookingStudent.innerHTML = studentOptions;
   els.bookingEditStudent.innerHTML = studentOptions;
   els.reportStudent.innerHTML = `<option value="">All students</option>` + students.map((student) => `<option value="${student.student_id}">${escapeHtml(student.student_name)}${student.active ? "" : " (Archived)"}</option>`).join("");
+  els.completedStudent.innerHTML = `<option value="">All students</option>` + students.map((student) => `<option value="${student.student_id}">${escapeHtml(student.student_name)}${student.active ? "" : " (Archived)"}</option>`).join("");
   els.bookingEditTutor.innerHTML = tutorOptions;
 }
 
@@ -296,6 +325,49 @@ async function login(event) {
     switchTab("home");
   } catch (error) {
     els.loginMessage.textContent = error.message;
+  }
+}
+
+function showPasswordResetRequest() {
+  els.loginForm.hidden = true;
+  els.passwordResetRequestForm.hidden = false;
+  els.passwordResetRequestMessage.textContent = "";
+  els.passwordResetEmail.value = els.loginEmail.value;
+}
+
+function hidePasswordResetRequest() {
+  els.passwordResetRequestForm.hidden = true;
+  els.loginForm.hidden = false;
+}
+
+async function requestPasswordReset(event) {
+  event.preventDefault();
+  els.passwordResetRequestMessage.textContent = "Requesting reset link...";
+  const data = await api("/api/password-reset/request", {
+    method: "POST",
+    body: JSON.stringify({ email: els.passwordResetEmail.value }),
+  });
+  els.passwordResetRequestMessage.textContent = data.message;
+}
+
+async function completePasswordReset(event) {
+  event.preventDefault();
+  if (els.passwordResetNew.value !== els.passwordResetConfirm.value) {
+    els.passwordResetCompleteMessage.textContent = "The passwords do not match.";
+    return;
+  }
+  els.passwordResetCompleteMessage.textContent = "Saving new password...";
+  try {
+    await api("/api/password-reset/complete", {
+      method: "POST",
+      body: JSON.stringify({ token: els.passwordResetToken.value, new_password: els.passwordResetNew.value }),
+    });
+    history.replaceState({}, "", location.pathname);
+    els.passwordResetCompleteForm.hidden = true;
+    els.loginForm.hidden = false;
+    els.loginMessage.textContent = "Password reset successfully. You can now sign in.";
+  } catch (error) {
+    els.passwordResetCompleteMessage.textContent = error.message;
   }
 }
 
@@ -692,22 +764,49 @@ async function loadHome() {
   $$("[data-open-calendar]").forEach((button) => button.addEventListener("click", () => switchTab("calendar")));
 }
 
+function updateCompletedPeriodFields() {
+  const period = els.completedPeriod.value;
+  els.completedMonth.hidden = period !== "month";
+  els.completedDay.hidden = period !== "day";
+  els.completedStart.hidden = period !== "range";
+  els.completedEnd.hidden = period !== "range";
+}
+
+function completedLessonsQuery() {
+  const qs = new URLSearchParams();
+  if (els.completedPeriod.value === "month") qs.set("month", els.completedMonth.value);
+  if (els.completedPeriod.value === "day") {
+    qs.set("start", els.completedDay.value);
+    qs.set("end", els.completedDay.value);
+  }
+  if (els.completedPeriod.value === "range") {
+    qs.set("start", els.completedStart.value);
+    qs.set("end", els.completedEnd.value);
+  }
+  if (currentUser.role === "Master" && els.completedTutor.value) qs.set("tutor_id", els.completedTutor.value);
+  if (currentUser.role === "Master" && els.completedStudent.value) qs.set("student_id", els.completedStudent.value);
+  return qs;
+}
+
 async function loadCompletedLessons() {
-  const data = await api(`/api/reports/lessons?month=${encodeURIComponent(els.completedMonth.value)}`);
+  const data = await api(`/api/reports/lessons?${completedLessonsQuery().toString()}`);
   const completedLessons = [...data.lessons];
   const dateValue = (lesson) => new Date(lesson.start_at || lesson.completed_at || 0).getTime();
   const studentValue = (lesson) => String(lesson.student_name || "");
+  const tutorValue = (lesson) => String(lesson.tutor_name || "");
   const sort = els.completedSort.value;
 
   completedLessons.sort((left, right) => {
     if (sort === "date-asc") return dateValue(left) - dateValue(right);
     if (sort === "student-asc") return studentValue(left).localeCompare(studentValue(right), "en-GB", { sensitivity: "base" }) || dateValue(right) - dateValue(left);
     if (sort === "student-desc") return studentValue(right).localeCompare(studentValue(left), "en-GB", { sensitivity: "base" }) || dateValue(right) - dateValue(left);
+    if (sort === "tutor-asc") return tutorValue(left).localeCompare(tutorValue(right), "en-GB", { sensitivity: "base" }) || dateValue(right) - dateValue(left);
+    if (sort === "tutor-desc") return tutorValue(right).localeCompare(tutorValue(left), "en-GB", { sensitivity: "base" }) || dateValue(right) - dateValue(left);
     return dateValue(right) - dateValue(left);
   });
 
   const lessonWord = completedLessons.length === 1 ? "lesson" : "lessons";
-  els.completedLessonSummary.textContent = `${completedLessons.length} completed ${lessonWord} for the selected month.`;
+  els.completedLessonSummary.textContent = `${completedLessons.length} completed ${lessonWord} for the selected period.`;
   els.completedLessonList.innerHTML = completedLessons.length
     ? completedLessons.map(completedLessonItem).join("")
     : `<div class="notice">No completed lessons recorded for this month.</div>`;
@@ -854,9 +953,18 @@ async function loadFinance() {
     ${escapeHtml(vatPosition)} (${vat.percent}%).
     <progress max="100" value="${Math.min(Math.max(vat.percent, 0), 100)}" aria-label="VAT threshold usage"></progress>
   `;
-  els.vatHistory.innerHTML = vat.series.map((point) => `
-    <article class="item"><div class="item-head"><h4>${escapeHtml(point.month)}</h4><strong>${money(point.turnover)}</strong></div></article>
-  `).join("");
+  const chartMaximum = Math.max(...vat.series.map((point) => Number(point.turnover || 0)), 1);
+  els.vatHistory.innerHTML = vat.series.map((point) => {
+    const height = Math.max((Number(point.turnover || 0) / chartMaximum) * 100, point.turnover ? 3 : 0);
+    const monthLabel = new Intl.DateTimeFormat("en-GB", { month: "short", year: "2-digit" }).format(new Date(`${point.month}-01T00:00:00`));
+    return `
+      <div class="vat-bar-column" title="${escapeHtml(monthLabel)}: ${escapeHtml(money(point.turnover))}">
+        <span class="vat-bar-value">${money(point.turnover)}</span>
+        <div class="vat-bar-track"><div class="vat-bar" style="height:${height.toFixed(1)}%"></div></div>
+        <span class="vat-bar-month">${escapeHtml(monthLabel)}</span>
+      </div>
+    `;
+  }).join("");
   els.expenseList.innerHTML = data.expenses.length ? data.expenses.map((expense) => `
     <article class="item">
       <div class="item-head"><h4>${escapeHtml(expense.description)}</h4><strong>${money(expense.amount)}</strong></div>
@@ -916,6 +1024,10 @@ function downloadBackup() {
 
 els.setupForm.addEventListener("submit", setupMaster);
 els.loginForm.addEventListener("submit", login);
+els.showPasswordReset.addEventListener("click", showPasswordResetRequest);
+els.cancelPasswordResetRequest.addEventListener("click", hidePasswordResetRequest);
+els.passwordResetRequestForm.addEventListener("submit", requestPasswordReset);
+els.passwordResetCompleteForm.addEventListener("submit", completePasswordReset);
 els.logoutButton.addEventListener("click", logout);
 els.tabs.forEach((tab) => tab.addEventListener("click", () => switchTab(tab.dataset.tab)));
 els.tutorForm.addEventListener("submit", saveTutor);
@@ -933,7 +1045,16 @@ els.cancelBookingButton.addEventListener("click", cancelBooking);
 els.deleteBookingButton.addEventListener("click", deleteBooking);
 els.calendarMonth.addEventListener("change", loadCalendar);
 els.homeMonth.addEventListener("change", loadHome);
+els.completedPeriod.addEventListener("change", () => {
+  updateCompletedPeriodFields();
+  loadCompletedLessons();
+});
 els.completedMonth.addEventListener("change", loadCompletedLessons);
+els.completedDay.addEventListener("change", loadCompletedLessons);
+els.completedStart.addEventListener("change", loadCompletedLessons);
+els.completedEnd.addEventListener("change", loadCompletedLessons);
+els.completedTutor.addEventListener("change", loadCompletedLessons);
+els.completedStudent.addEventListener("change", loadCompletedLessons);
 els.completedSort.addEventListener("change", loadCompletedLessons);
 els.loadCompletedLessons.addEventListener("click", loadCompletedLessons);
 els.completeForm.addEventListener("submit", completeLesson);
