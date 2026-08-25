@@ -59,6 +59,7 @@ const els = {
   assignedTutor: $("#assignedTutor"),
   studentMessage: $("#studentMessage"),
   studentList: $("#studentList"),
+  studentCount: $("#studentCount"),
   calendarMonth: $("#calendarMonth"),
   bookingForm: $("#bookingForm"),
   bookingStudent: $("#bookingStudent"),
@@ -154,6 +155,19 @@ const els = {
   studentEditMessage: $("#studentEditMessage"),
   closeStudentEditX: $("#closeStudentEditX"),
   cancelStudentEdit: $("#cancelStudentEdit"),
+  tutorDocumentsDialog: $("#tutorDocumentsDialog"),
+  tutorDocumentForm: $("#tutorDocumentForm"),
+  tutorDocumentTutorId: $("#tutorDocumentTutorId"),
+  tutorDocumentContext: $("#tutorDocumentContext"),
+  tutorDocumentType: $("#tutorDocumentType"),
+  tutorDocumentReference: $("#tutorDocumentReference"),
+  tutorDocumentExpiry: $("#tutorDocumentExpiry"),
+  tutorDocumentFile: $("#tutorDocumentFile"),
+  tutorDocumentNotes: $("#tutorDocumentNotes"),
+  tutorDocumentMessage: $("#tutorDocumentMessage"),
+  tutorDocumentList: $("#tutorDocumentList"),
+  closeTutorDocumentsX: $("#closeTutorDocumentsX"),
+  closeTutorDocuments: $("#closeTutorDocuments"),
 };
 
 let currentUser = null;
@@ -199,6 +213,18 @@ function timePart(value) {
 
 function money(value) {
   return new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" }).format(Number(value || 0));
+}
+
+function formatFileSize(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatDate(value) {
+  if (!value) return "Not set";
+  return new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" }).format(new Date(`${value}T12:00:00`));
 }
 
 async function api(path, options = {}) {
@@ -401,6 +427,7 @@ function renderTutors() {
       <div class="button-row">
         <button type="button" data-edit-tutor="${tutor.user_id}">Edit</button>
         <button class="ghost dark-ghost" type="button" data-reset-tutor="${tutor.user_id}">Reset Password</button>
+        <button class="ghost dark-ghost" type="button" data-documents-tutor="${tutor.user_id}">Documents (${Number(tutor.document_count || 0)})</button>
         <button class="${tutor.active ? "warn" : ""}" type="button" data-status-tutor="${tutor.user_id}">${tutor.active ? "Make Inactive" : "Reactivate"}</button>
         <button class="danger" type="button" data-remove-tutor="${tutor.user_id}">Remove</button>
       </div>
@@ -408,8 +435,107 @@ function renderTutors() {
   `).join("") : `<div class="notice">No tutor accounts yet.</div>`;
   $$("[data-edit-tutor]").forEach((button) => button.addEventListener("click", () => editTutor(Number(button.dataset.editTutor))));
   $$("[data-reset-tutor]").forEach((button) => button.addEventListener("click", () => resetTutorPassword(Number(button.dataset.resetTutor))));
+  $$("[data-documents-tutor]").forEach((button) => button.addEventListener("click", () => openTutorDocuments(Number(button.dataset.documentsTutor))));
   $$("[data-status-tutor]").forEach((button) => button.addEventListener("click", () => changeTutorStatus(Number(button.dataset.statusTutor))));
   $$("[data-remove-tutor]").forEach((button) => button.addEventListener("click", () => removeTutor(Number(button.dataset.removeTutor))));
+}
+
+async function openTutorDocuments(tutorId) {
+  const tutor = tutors.find((item) => Number(item.user_id) === Number(tutorId));
+  if (!tutor) return;
+  els.tutorDocumentForm.reset();
+  els.tutorDocumentTutorId.value = tutorId;
+  els.tutorDocumentContext.textContent = `${tutor.name} · master access only`;
+  els.tutorDocumentMessage.textContent = "";
+  els.tutorDocumentsDialog.showModal();
+  await loadTutorDocuments();
+}
+
+async function loadTutorDocuments() {
+  const tutorId = Number(els.tutorDocumentTutorId.value);
+  if (!tutorId) return;
+  els.tutorDocumentList.innerHTML = `<div class="notice">Loading records...</div>`;
+  try {
+    const data = await api(`/api/tutor-documents?tutor_id=${tutorId}`);
+    els.tutorDocumentList.innerHTML = data.documents.length ? data.documents.map((document) => {
+      const expired = document.expires_on && document.expires_on < today();
+      return `
+        <article class="document-item ${expired ? "document-expired" : ""}">
+          <div class="item-head">
+            <div><h4>${escapeHtml(document.document_type)}</h4><p>${escapeHtml(document.filename || "Record only — no file stored")}</p></div>
+            <span class="pill">${expired ? "Review overdue" : (document.expires_on ? `Review ${escapeHtml(formatDate(document.expires_on))}` : "No review date")}</span>
+          </div>
+          ${document.reference ? `<p><strong>Reference:</strong> ${escapeHtml(document.reference)}</p>` : ""}
+          ${document.notes ? `<p>${escapeHtml(document.notes)}</p>` : ""}
+          <p class="document-meta">Saved ${escapeHtml(formatDateTime(document.uploaded_at))}${document.file_size ? ` · ${escapeHtml(formatFileSize(document.file_size))}` : ""}</p>
+          <div class="button-row">
+            ${document.has_file ? `<button type="button" data-download-document="${document.document_id}">Download</button>` : ""}
+            <button class="danger" type="button" data-delete-document="${document.document_id}">Delete</button>
+          </div>
+        </article>`;
+    }).join("") : `<div class="notice">No document records saved for this tutor.</div>`;
+    $$("[data-download-document]").forEach((button) => button.addEventListener("click", () => {
+      window.open(`/api/tutor-documents/${button.dataset.downloadDocument}/download`, "_blank");
+    }));
+    $$("[data-delete-document]").forEach((button) => button.addEventListener("click", () => deleteTutorDocument(Number(button.dataset.deleteDocument))));
+  } catch (error) {
+    els.tutorDocumentList.innerHTML = `<div class="notice">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function fileAsBase64(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  for (let start = 0; start < bytes.length; start += 32768) {
+    binary += String.fromCharCode(...bytes.subarray(start, start + 32768));
+  }
+  return btoa(binary);
+}
+
+async function saveTutorDocument(event) {
+  event.preventDefault();
+  const file = els.tutorDocumentFile.files[0];
+  if (file && els.tutorDocumentType.value === "DBS check record") {
+    els.tutorDocumentMessage.textContent = "Record the DBS check details without attaching the certificate copy.";
+    return;
+  }
+  if (file && file.size > 5 * 1024 * 1024) {
+    els.tutorDocumentMessage.textContent = "Files must be no larger than 5 MB.";
+    return;
+  }
+  els.tutorDocumentMessage.textContent = "Saving record...";
+  try {
+    await api("/api/tutor-documents", {
+      method: "POST",
+      body: JSON.stringify({
+        tutor_id: Number(els.tutorDocumentTutorId.value),
+        document_type: els.tutorDocumentType.value,
+        reference: els.tutorDocumentReference.value,
+        expires_on: els.tutorDocumentExpiry.value,
+        notes: els.tutorDocumentNotes.value,
+        filename: file?.name || "",
+        content_type: file?.type || "",
+        file_data: file ? await fileAsBase64(file) : "",
+      }),
+    });
+    els.tutorDocumentMessage.textContent = "Record saved.";
+    const tutorId = Number(els.tutorDocumentTutorId.value);
+    els.tutorDocumentForm.reset();
+    els.tutorDocumentTutorId.value = tutorId;
+    await refreshBaseData();
+    await loadTutorDocuments();
+    renderTutors();
+  } catch (error) {
+    els.tutorDocumentMessage.textContent = error.message;
+  }
+}
+
+async function deleteTutorDocument(documentId) {
+  if (!confirm("Permanently delete this document record and its stored file? This cannot be undone.")) return;
+  await api(`/api/tutor-documents/${documentId}/delete`, { method: "POST", body: "{}" });
+  await refreshBaseData();
+  await loadTutorDocuments();
+  renderTutors();
 }
 
 async function editTutor(tutorId) {
@@ -492,20 +618,35 @@ async function saveStudent(event) {
 }
 
 function renderStudents() {
-  els.studentList.innerHTML = students.length ? students.map((student) => `
-    <article class="item" data-student-id="${student.student_id}">
-      <div class="item-head"><h4>${escapeHtml(student.student_name)}</h4><span class="pill">${escapeHtml(student.active ? (student.tutor_name || "Unassigned") : "Archived")}</span></div>
-      <p>${escapeHtml(student.parent_name || "No parent")} / ${escapeHtml(student.parent_email || "No email")}</p>
-      <p>${escapeHtml(student.year_group || "No year group")} / ${escapeHtml(student.target_school || "No target")}</p>
-      ${currentUser.role === "Master"
-        ? `<p><strong>Client charge:</strong> ${money(student.hourly_rate)}/hour / <strong>Tutor pay:</strong> ${money(effectiveStudentTutorRate(student))}/hour${student.tutor_hourly_rate == null ? " (tutor default)" : " (student-specific)"}</p>`
-        : `<p><strong>Your rate:</strong> ${money(student.tutor_rate)}/hour</p>`}
-      ${currentUser.role === "Master" ? `<div class="button-row">
-        <button type="button" data-edit-student="${student.student_id}">Edit Student</button>
-        <button class="${student.assigned_tutor_id ? "warn" : "ghost dark-ghost"}" type="button" data-remove-student="${student.student_id}">${student.assigned_tutor_id ? "Unassign / Remove" : "Remove Student"}</button>
-      </div>` : ""}
-    </article>
-  `).join("") : `<div class="notice">No students yet.</div>`;
+  els.studentCount.textContent = `${students.length} student${students.length === 1 ? "" : "s"}`;
+  if (!students.length) {
+    els.studentList.innerHTML = `<div class="notice">No students yet.</div>`;
+    return;
+  }
+  const master = currentUser.role === "Master";
+  els.studentList.innerHTML = `
+    <div class="table-wrap">
+      <table class="student-table">
+        <thead><tr>
+          <th>Student</th><th>Parent</th><th>Email</th><th>Tutor</th>
+          ${master ? `<th>Client rate</th><th>Tutor rate</th><th>Status</th><th><span class="sr-only">Actions</span></th>` : `<th>Your rate</th><th>Status</th>`}
+        </tr></thead>
+        <tbody>${students.map((student) => `
+          <tr class="${student.active ? "" : "archived-row"}">
+            <td data-label="Student"><strong>${escapeHtml(student.student_name)}</strong></td>
+            <td data-label="Parent">${escapeHtml(student.parent_name || "—")}</td>
+            <td data-label="Email" class="email-cell">${escapeHtml(student.parent_email || "—")}</td>
+            <td data-label="Tutor">${escapeHtml(student.tutor_name || "Unassigned")}</td>
+            ${master ? `
+              <td data-label="Client rate"><strong>${money(student.hourly_rate)}</strong><small>/hr</small></td>
+              <td data-label="Tutor rate"><strong>${money(effectiveStudentTutorRate(student))}</strong><small>/hr${student.tutor_hourly_rate == null ? " · default" : " · custom"}</small></td>
+              <td data-label="Status"><span class="pill">${student.active ? "Active" : "Archived"}</span></td>
+              <td class="table-actions"><button type="button" data-edit-student="${student.student_id}" aria-label="Edit ${escapeHtml(student.student_name)}">Edit</button><button class="ghost dark-ghost" type="button" data-remove-student="${student.student_id}" aria-label="Remove or unassign ${escapeHtml(student.student_name)}">Manage</button></td>
+            ` : `<td data-label="Your rate"><strong>${money(student.tutor_rate)}</strong><small>/hr</small></td><td data-label="Status"><span class="pill">${student.active ? "Active" : "Archived"}</span></td>`}
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
   $$("[data-edit-student]").forEach((button) => button.addEventListener("click", () => editStudent(Number(button.dataset.editStudent))));
   $$("[data-remove-student]").forEach((button) => button.addEventListener("click", () => openStudentRemoval(Number(button.dataset.removeStudent))));
 }
@@ -1081,6 +1222,9 @@ els.cancelStudentEdit.addEventListener("click", () => els.studentEditDialog.clos
 els.studentRemovalForm.addEventListener("submit", removeStudent);
 els.closeStudentRemovalX.addEventListener("click", () => els.studentRemovalDialog.close());
 els.cancelStudentRemoval.addEventListener("click", () => els.studentRemovalDialog.close());
+els.tutorDocumentForm.addEventListener("submit", saveTutorDocument);
+els.closeTutorDocumentsX.addEventListener("click", () => els.tutorDocumentsDialog.close());
+els.closeTutorDocuments.addEventListener("click", () => els.tutorDocumentsDialog.close());
 els.passwordForm.addEventListener("submit", changePassword);
 els.downloadBackup.addEventListener("click", downloadBackup);
 

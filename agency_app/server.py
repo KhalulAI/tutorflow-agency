@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import csv
 import hashlib
 import hmac
@@ -29,6 +31,13 @@ PORT = int(os.environ.get("PORT", "8010"))
 SESSION_COOKIE = "tutorflow_agency_session"
 POSTMARK_FROM_NAME = "SWL Education - TutorFlow"
 DEFAULT_VAT_THRESHOLD = 90_000.0
+MAX_TUTOR_DOCUMENT_BYTES = 5 * 1024 * 1024
+ALLOWED_TUTOR_DOCUMENT_TYPES = {
+    "application/pdf": ".pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+}
 
 
 def vat_threshold() -> float:
@@ -191,8 +200,46 @@ def ensure_column(conn, table: str, column: str, definition: str) -> None:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
+def safe_document_filename(value: str) -> str:
+    filename = Path(str(value or "")).name.strip()
+    filename = re.sub(r"[^A-Za-z0-9._ -]+", "-", filename).strip(" .-")
+    return filename[:180]
+
+
+def validate_tutor_document(filename: str, content_type: str, content: bytes) -> tuple[str, str]:
+    filename = safe_document_filename(filename)
+    content_type = str(content_type or "").lower().strip()
+    if not filename or content_type not in ALLOWED_TUTOR_DOCUMENT_TYPES:
+        raise ValueError("Upload a PDF, DOCX, JPG or PNG file.")
+    expected_extension = ALLOWED_TUTOR_DOCUMENT_TYPES[content_type]
+    suffix = Path(filename).suffix.lower()
+    if content_type == "image/jpeg" and suffix == ".jpeg":
+        suffix = ".jpg"
+    if suffix != expected_extension:
+        raise ValueError("The file extension does not match the selected file type.")
+    if len(content) > MAX_TUTOR_DOCUMENT_BYTES:
+        raise ValueError("Files must be no larger than 5 MB.")
+    signatures = {
+        "application/pdf": content.startswith(b"%PDF"),
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": content.startswith(b"PK"),
+        "image/jpeg": content.startswith(b"\xff\xd8\xff"),
+        "image/png": content.startswith(b"\x89PNG\r\n\x1a\n"),
+    }
+    if not signatures[content_type]:
+        raise ValueError("The uploaded file contents do not match its file type.")
+    if content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        try:
+            with zipfile.ZipFile(BytesIO(content)) as document_archive:
+                if "word/document.xml" not in document_archive.namelist():
+                    raise ValueError("The DOCX file is not a valid Word document.")
+        except zipfile.BadZipFile as error:
+            raise ValueError("The DOCX file is not a valid Word document.") from error
+    return filename, content_type
+
+
 def init_db() -> None:
     primary_key = "SERIAL PRIMARY KEY" if DATABASE_URL else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    binary_type = "BYTEA" if DATABASE_URL else "BLOB"
     with db() as conn:
         conn.executescript(
             f"""
@@ -280,6 +327,23 @@ def init_db() -> None:
                 created_by INTEGER,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(created_by) REFERENCES users(user_id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS tutor_documents (
+                document_id {primary_key},
+                tutor_id INTEGER NOT NULL,
+                document_type TEXT NOT NULL DEFAULT 'Other',
+                reference TEXT NOT NULL DEFAULT '',
+                filename TEXT NOT NULL DEFAULT '',
+                content_type TEXT NOT NULL DEFAULT '',
+                file_size INTEGER NOT NULL DEFAULT 0,
+                file_data {binary_type},
+                notes TEXT NOT NULL DEFAULT '',
+                expires_on TEXT,
+                uploaded_by INTEGER,
+                uploaded_at TEXT NOT NULL,
+                FOREIGN KEY(tutor_id) REFERENCES users(user_id) ON DELETE CASCADE,
+                FOREIGN KEY(uploaded_by) REFERENCES users(user_id) ON DELETE SET NULL
             );
             """
         )
@@ -916,8 +980,72 @@ class Handler(SimpleHTTPRequestHandler):
             if not self.require_master():
                 return
             with db() as conn:
-                tutors = rows(conn.execute("SELECT user_id, name, email, role, hourly_rate, active FROM users ORDER BY role, name"))
+                tutors = rows(conn.execute(
+                    """
+                    SELECT u.user_id, u.name, u.email, u.role, u.hourly_rate, u.active,
+                           (SELECT COUNT(*) FROM tutor_documents td WHERE td.tutor_id = u.user_id) AS document_count
+                    FROM users u
+                    ORDER BY u.role, u.name
+                    """
+                ))
             return self.send_json({"users": tutors})
+
+        if path == "/api/tutor-documents":
+            if not self.require_master():
+                return
+            try:
+                tutor_id = int(query.get("tutor_id", [""])[0])
+            except (TypeError, ValueError):
+                return self.send_json({"error": "Choose a tutor."}, 400)
+            with db() as conn:
+                tutor = conn.execute(
+                    "SELECT user_id, name FROM users WHERE user_id = ? AND role = 'Tutor'",
+                    (tutor_id,),
+                ).fetchone()
+                if not tutor:
+                    return self.send_json({"error": "Tutor not found."}, 404)
+                documents = rows(conn.execute(
+                    """
+                    SELECT td.document_id, td.tutor_id, td.document_type, td.reference,
+                           td.filename, td.content_type, td.file_size, td.notes,
+                           td.expires_on, td.uploaded_at, u.name AS uploaded_by_name,
+                           CASE WHEN td.file_data IS NULL THEN 0 ELSE 1 END AS has_file
+                    FROM tutor_documents td
+                    LEFT JOIN users u ON u.user_id = td.uploaded_by
+                    WHERE td.tutor_id = ?
+                    ORDER BY CASE WHEN td.expires_on IS NULL OR td.expires_on = '' THEN 1 ELSE 0 END,
+                             td.expires_on, td.uploaded_at DESC
+                    """,
+                    (tutor_id,),
+                ))
+            return self.send_json({"tutor": dict(tutor), "documents": documents})
+
+        if path.startswith("/api/tutor-documents/") and path.endswith("/download"):
+            if not self.require_master():
+                return
+            try:
+                document_id = int(path.split("/")[3])
+            except (IndexError, ValueError):
+                return self.send_json({"error": "Document not found."}, 404)
+            with db() as conn:
+                document = conn.execute(
+                    """
+                    SELECT filename, content_type, file_data
+                    FROM tutor_documents
+                    WHERE document_id = ?
+                    """,
+                    (document_id,),
+                ).fetchone()
+            if not document or document["file_data"] is None:
+                return self.send_json({"error": "No file is stored for this record."}, 404)
+            content = document["file_data"]
+            if isinstance(content, memoryview):
+                content = content.tobytes()
+            return self.send_bytes(
+                bytes(content),
+                safe_document_filename(document["filename"]) or "tutor-document",
+                document["content_type"] or "application/octet-stream",
+            )
 
         if path == "/api/students":
             where, params = self.visible_student_filter(user)
@@ -1123,6 +1251,26 @@ class Handler(SimpleHTTPRequestHandler):
                             f"{table}.json",
                             json.dumps(rows(conn.execute(f"SELECT * FROM {table}")), indent=2),
                         )
+                    document_rows = rows(conn.execute(
+                        """
+                        SELECT document_id, tutor_id, document_type, reference, filename,
+                               content_type, file_size, notes, expires_on, uploaded_by, uploaded_at
+                        FROM tutor_documents
+                        ORDER BY document_id
+                        """
+                    ))
+                    archive.writestr("tutor_documents.json", json.dumps(document_rows, indent=2))
+                    for document in conn.execute(
+                        "SELECT document_id, filename, file_data FROM tutor_documents WHERE file_data IS NOT NULL"
+                    ):
+                        content = document["file_data"]
+                        if isinstance(content, memoryview):
+                            content = content.tobytes()
+                        filename_part = safe_document_filename(document["filename"]) or "document.bin"
+                        archive.writestr(
+                            f"tutor-documents/{document['document_id']}-{filename_part}",
+                            bytes(content),
+                        )
                 archive.writestr("created_at.txt", now_iso())
             return self.send_bytes(payload.getvalue(), filename, "application/zip")
 
@@ -1235,6 +1383,110 @@ class Handler(SimpleHTTPRequestHandler):
                 if not row or not check_password(payload.get("current_password", ""), row["password_hash"]):
                     return self.send_json({"error": "Current password is incorrect."}, 400)
                 conn.execute("UPDATE users SET password_hash = ? WHERE user_id = ?", (hash_password(payload["new_password"]), user["user_id"]))
+            return self.send_json({"ok": True})
+
+        if path == "/api/tutor-documents":
+            if not self.require_master():
+                return
+            allowed_categories = {
+                "DBS check record",
+                "Signed terms",
+                "Insurance",
+                "Qualification",
+                "Identity / right to work",
+                "Other",
+            }
+            document_type = str(payload.get("document_type") or "Other").strip()
+            reference = str(payload.get("reference") or "").strip()[:160]
+            notes = str(payload.get("notes") or "").strip()[:1000]
+            expires_on = str(payload.get("expires_on") or "").strip() or None
+            if document_type not in allowed_categories:
+                return self.send_json({"error": "Choose a valid document category."}, 400)
+            if expires_on:
+                try:
+                    date.fromisoformat(expires_on)
+                except ValueError:
+                    return self.send_json({"error": "Choose a valid review or expiry date."}, 400)
+            try:
+                tutor_id = int(payload.get("tutor_id"))
+            except (TypeError, ValueError):
+                return self.send_json({"error": "Choose a tutor."}, 400)
+
+            encoded_file = str(payload.get("file_data") or "").strip()
+            filename = ""
+            content_type = ""
+            file_content = None
+            if encoded_file:
+                if document_type == "DBS check record":
+                    return self.send_json(
+                        {"error": "For data minimisation, record the DBS check details rather than uploading a certificate copy."},
+                        400,
+                    )
+                if len(encoded_file) > (MAX_TUTOR_DOCUMENT_BYTES * 4 // 3) + 16:
+                    return self.send_json({"error": "Files must be no larger than 5 MB."}, 400)
+                try:
+                    file_content = base64.b64decode(encoded_file, validate=True)
+                except (binascii.Error, ValueError):
+                    return self.send_json({"error": "The uploaded file could not be read."}, 400)
+                try:
+                    filename, content_type = validate_tutor_document(
+                        payload.get("filename", ""),
+                        payload.get("content_type", ""),
+                        file_content,
+                    )
+                except ValueError as error:
+                    return self.send_json({"error": str(error)}, 400)
+            elif not reference and not notes:
+                return self.send_json(
+                    {"error": "Attach a file or save a reference/note for this record."},
+                    400,
+                )
+
+            with db() as conn:
+                tutor = conn.execute(
+                    "SELECT user_id FROM users WHERE user_id = ? AND role = 'Tutor'",
+                    (tutor_id,),
+                ).fetchone()
+                if not tutor:
+                    return self.send_json({"error": "Tutor not found."}, 404)
+                conn.execute(
+                    """
+                    INSERT INTO tutor_documents (
+                        tutor_id, document_type, reference, filename, content_type,
+                        file_size, file_data, notes, expires_on, uploaded_by, uploaded_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        tutor_id,
+                        document_type,
+                        reference,
+                        filename,
+                        content_type,
+                        len(file_content or b""),
+                        file_content,
+                        notes,
+                        expires_on,
+                        user["user_id"],
+                        now_iso(),
+                    ),
+                )
+            return self.send_json({"ok": True})
+
+        if path.startswith("/api/tutor-documents/") and path.endswith("/delete"):
+            if not self.require_master():
+                return
+            try:
+                document_id = int(path.split("/")[3])
+            except (IndexError, ValueError):
+                return self.send_json({"error": "Document not found."}, 404)
+            with db() as conn:
+                document = conn.execute(
+                    "SELECT document_id FROM tutor_documents WHERE document_id = ?",
+                    (document_id,),
+                ).fetchone()
+                if not document:
+                    return self.send_json({"error": "Document not found."}, 404)
+                conn.execute("DELETE FROM tutor_documents WHERE document_id = ?", (document_id,))
             return self.send_json({"ok": True})
 
         if path == "/api/users":

@@ -108,7 +108,13 @@
             <button type="submit">Save Student</button>
             <p id="studentMessage" role="status"></p>
           </form>
-          <article class="panel"><h3>Students</h3><div id="studentList" class="list"></div></article>
+          <article class="panel student-directory-panel">
+            <div class="directory-heading">
+              <div><h3>Student Directory</h3><p class="muted-copy">A quick view of family contacts, assignments and rates.</p></div>
+              <span id="studentCount" class="pill"></span>
+            </div>
+            <div id="studentList"></div>
+          </article>
         </section>
       </section>
 
@@ -293,6 +299,42 @@
       </form>
     </dialog>
 
+    <dialog id="tutorDocumentsDialog" class="wide-dialog">
+      <form id="tutorDocumentForm" method="dialog">
+        <div class="dialog-header">
+          <div><h2>Tutor Documents</h2><p id="tutorDocumentContext" class="muted-copy"></p></div>
+          <button class="dialog-close" type="button" id="closeTutorDocumentsX" aria-label="Close" title="Close">&times;</button>
+        </div>
+        <input id="tutorDocumentTutorId" type="hidden">
+        <div class="document-form-grid">
+          <label><span>Record type</span><select id="tutorDocumentType">
+            <option>DBS check record</option>
+            <option>Signed terms</option>
+            <option>Insurance</option>
+            <option>Qualification</option>
+            <option>Identity / right to work</option>
+            <option>Other</option>
+          </select></label>
+          <label><span>Reference (optional)</span><input id="tutorDocumentReference" maxlength="160" placeholder="e.g. certificate/reference number"></label>
+          <label><span>Review / expiry date (optional)</span><input id="tutorDocumentExpiry" type="date"></label>
+          <label><span>File (optional)</span><input id="tutorDocumentFile" type="file" accept=".pdf,.docx,.jpg,.jpeg,.png"><small>PDF, DOCX, JPG or PNG; maximum 5 MB.</small></label>
+          <label class="document-notes"><span>Notes (optional)</span><textarea id="tutorDocumentNotes" rows="2" maxlength="1000"></textarea></label>
+        </div>
+        <div class="privacy-callout">
+          <strong>DBS data needs extra care.</strong> Save the check date, certificate reference, level/type and recruitment decision in the reference and notes fields. To minimise criminal-offence data, this app does not accept a certificate file when “DBS check record” is selected.
+        </div>
+        <div class="dialog-actions">
+          <button id="closeTutorDocuments" class="ghost dark-ghost" type="button">Close</button>
+          <button type="submit">Save Record</button>
+        </div>
+        <p id="tutorDocumentMessage" role="status"></p>
+        <section class="document-register">
+          <h3>Stored Records</h3>
+          <div id="tutorDocumentList" class="list"></div>
+        </section>
+      </form>
+    </dialog>
+
     <dialog id="studentRemovalDialog">
       <form id="studentRemovalForm" method="dialog">
         <div class="dialog-header">
@@ -360,6 +402,6 @@
       </form>
     </dialog>
 
-    <script src="/app.js?v=agency-hardening-6"></script>
+    <script src="/app.js?v=agency-hardening-7"></script>
   </body>
 </html>

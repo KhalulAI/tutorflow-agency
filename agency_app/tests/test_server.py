@@ -1,3 +1,4 @@
+import base64
 import http.cookiejar
 import json
 import os
@@ -74,6 +75,89 @@ class AgencyApiTests(unittest.TestCase):
         self.assertEqual(user["role"], "Master")
         _, session = self.api("/api/session")
         self.assertEqual(session["user"]["email"], "owner@example.com")
+
+    def test_tutor_documents_are_master_only_and_support_record_only_dbs(self):
+        self.login_as_master()
+        server.send_tutor_credentials_email = lambda *_args, **_kwargs: "message-id"
+        _, created = self.api(
+            "/api/users",
+            "POST",
+            {"name": "Secure Tutor", "email": "secure@example.com", "hourly_rate": 45},
+        )
+        _, users = self.api("/api/users")
+        tutor = next(item for item in users["users"] if item["email"] == "secure@example.com")
+
+        pdf_content = b"%PDF-1.4\n% tutor terms\n%%EOF"
+        _, uploaded = self.api(
+            "/api/tutor-documents",
+            "POST",
+            {
+                "tutor_id": tutor["user_id"],
+                "document_type": "Signed terms",
+                "reference": "TERMS-2026",
+                "filename": "signed-terms.pdf",
+                "content_type": "application/pdf",
+                "file_data": base64.b64encode(pdf_content).decode("ascii"),
+                "expires_on": "2027-08-25",
+                "notes": "Signed electronically",
+            },
+        )
+        self.assertTrue(uploaded["ok"])
+        self.api(
+            "/api/tutor-documents",
+            "POST",
+            {
+                "tutor_id": tutor["user_id"],
+                "document_type": "DBS check record",
+                "reference": "DBS-REFERENCE-ONLY",
+                "notes": "Enhanced check reviewed; recruitment approved.",
+            },
+        )
+        with self.assertRaises(HTTPError) as dbs_upload_error:
+            self.api(
+                "/api/tutor-documents",
+                "POST",
+                {
+                    "tutor_id": tutor["user_id"],
+                    "document_type": "DBS check record",
+                    "filename": "dbs-certificate.pdf",
+                    "content_type": "application/pdf",
+                    "file_data": base64.b64encode(pdf_content).decode("ascii"),
+                },
+            )
+        self.assertEqual(dbs_upload_error.exception.code, 400)
+
+        _, register = self.api(f"/api/tutor-documents?tutor_id={tutor['user_id']}")
+        self.assertEqual(len(register["documents"]), 2)
+        terms = next(item for item in register["documents"] if item["document_type"] == "Signed terms")
+        dbs_record = next(item for item in register["documents"] if item["document_type"] == "DBS check record")
+        self.assertTrue(terms["has_file"])
+        self.assertFalse(dbs_record["has_file"])
+        self.assertNotIn("file_data", terms)
+
+        download = Request(self.base_url + f"/api/tutor-documents/{terms['document_id']}/download")
+        with self.opener.open(download) as response:
+            self.assertEqual(response.read(), pdf_content)
+            self.assertEqual(response.headers.get_content_type(), "application/pdf")
+            self.assertIn("signed-terms.pdf", response.headers["Content-Disposition"])
+
+        tutor_opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        self.api(
+            "/api/login",
+            "POST",
+            {"email": "secure@example.com", "password": created["temporary_password"]},
+            opener=tutor_opener,
+        )
+        with self.assertRaises(HTTPError) as list_error:
+            self.api(f"/api/tutor-documents?tutor_id={tutor['user_id']}", opener=tutor_opener)
+        self.assertEqual(list_error.exception.code, 403)
+        with self.assertRaises(HTTPError) as download_error:
+            tutor_opener.open(Request(self.base_url + f"/api/tutor-documents/{terms['document_id']}/download"))
+        self.assertEqual(download_error.exception.code, 403)
+
+        self.api(f"/api/tutor-documents/{terms['document_id']}/delete", "POST", {})
+        _, after_delete = self.api(f"/api/tutor-documents?tutor_id={tutor['user_id']}")
+        self.assertEqual(len(after_delete["documents"]), 1)
 
     def test_completing_a_lesson_sends_postmark_email(self):
         user = self.login_as_master()
