@@ -121,8 +121,13 @@
       <section class="page" id="calendar">
         <header class="page-head">
           <div><p class="eyebrow">Bookings</p><h2>Shared Calendar</h2></div>
-          <input id="calendarMonth" type="month">
+          <div class="calendar-lock-controls">
+            <span id="calendarLockStatus" class="pill">Open for changes</span>
+            <button id="toggleMonthLock" class="master-only ghost dark-ghost" type="button">Lock Month for Invoicing</button>
+            <input id="calendarMonth" type="month" aria-label="Calendar month">
+          </div>
         </header>
+        <div id="calendarLockNotice" class="notice" hidden></div>
         <section class="calendar-workspace">
           <form id="bookingForm" class="panel booking-panel">
             <h3>Add Lesson</h3>
@@ -395,13 +400,13 @@
           <button class="ghost dark-ghost" type="button" id="closeBookingDialog">Close</button>
           <button type="button" id="completeBookingFromDialog">Complete &amp; Add Notes</button>
           <button class="warn" type="button" id="cancelBookingButton">Cancel Lesson</button>
-          <button class="danger master-only" type="button" id="deleteBookingButton">Delete</button>
+          <button class="danger" type="button" id="deleteBookingButton">Delete Mistaken Entry</button>
           <button type="submit">Save Changes</button>
         </div>
         <p id="bookingEditMessage" role="status"></p>
       </form>
     </dialog>
 
-    <script src="/app.js?v=agency-hardening-7"></script>
+    <script src="/app.js?v=agency-hardening-8"></script>
   </body>
 </html>

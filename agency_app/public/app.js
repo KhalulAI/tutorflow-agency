@@ -61,6 +61,9 @@ const els = {
   studentList: $("#studentList"),
   studentCount: $("#studentCount"),
   calendarMonth: $("#calendarMonth"),
+  calendarLockStatus: $("#calendarLockStatus"),
+  calendarLockNotice: $("#calendarLockNotice"),
+  toggleMonthLock: $("#toggleMonthLock"),
   bookingForm: $("#bookingForm"),
   bookingStudent: $("#bookingStudent"),
   bookingTutor: $("#bookingTutor"),
@@ -175,6 +178,7 @@ let tutors = [];
 let students = [];
 let bookings = [];
 let lessons = [];
+let calendarMonthLocked = false;
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -736,7 +740,46 @@ async function removeStudent(event) {
 async function loadCalendar() {
   const data = await api(`/api/bookings?month=${encodeURIComponent(els.calendarMonth.value)}`);
   bookings = data.bookings;
+  calendarMonthLocked = Boolean(data.month_locked);
+  els.calendarLockStatus.textContent = calendarMonthLocked ? "Locked for invoicing" : "Open for changes";
+  els.calendarLockStatus.classList.toggle("locked", calendarMonthLocked);
+  els.toggleMonthLock.textContent = calendarMonthLocked ? "Unlock Month" : "Lock Month for Invoicing";
+  els.toggleMonthLock.classList.toggle("warn", calendarMonthLocked);
+  els.calendarLockNotice.hidden = !calendarMonthLocked;
+  els.calendarLockNotice.textContent = calendarMonthLocked
+    ? `${formatMonthLabel(els.calendarMonth.value)} is locked for invoicing${data.month_lock?.locked_by_name ? ` by ${data.month_lock.locked_by_name}` : ""}. Lessons can be viewed, but cannot be added, edited, completed, cancelled or deleted.`
+    : "";
+  const calendarWorkspace = $(".calendar-workspace");
+  calendarWorkspace.classList.toggle("month-locked", calendarMonthLocked);
+  els.bookingForm.querySelectorAll("input, select, textarea, button").forEach((control) => {
+    control.disabled = calendarMonthLocked;
+  });
+  els.bookingMessage.textContent = calendarMonthLocked ? "Unlock this month to add lessons." : "";
   renderCalendar();
+}
+
+function formatMonthLabel(month) {
+  if (!month) return "This month";
+  const [year, monthNumber] = month.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric" }).format(new Date(year, monthNumber - 1, 1));
+}
+
+async function toggleMonthLock() {
+  const nextLocked = !calendarMonthLocked;
+  const action = nextLocked ? "lock" : "unlock";
+  const consequence = nextLocked
+    ? "Tutors and the master account will no longer be able to change lessons or timesheets in this month."
+    : "Lesson and timesheet changes will be allowed again.";
+  if (!confirm(`${action[0].toUpperCase()}${action.slice(1)} ${formatMonthLabel(els.calendarMonth.value)}?\n\n${consequence}`)) return;
+  try {
+    await api("/api/month-locks", {
+      method: "POST",
+      body: JSON.stringify({ month: els.calendarMonth.value, locked: nextLocked }),
+    });
+    await loadCalendar();
+  } catch (error) {
+    alert(error.message);
+  }
 }
 
 function renderCalendar() {
@@ -776,6 +819,7 @@ function renderCalendar() {
 function openBookingDialog(bookingId) {
   const booking = bookings.find((item) => Number(item.booking_id) === Number(bookingId));
   if (!booking) return;
+  const bookingLocked = Boolean(booking.month_locked);
   els.bookingEditId.value = booking.booking_id;
   els.bookingEditContext.textContent = `${booking.student_name} with ${booking.tutor_name} / ${escapeHtml(booking.status)}`;
   els.bookingEditStudent.value = booking.student_id;
@@ -785,41 +829,63 @@ function openBookingDialog(bookingId) {
   els.bookingEditDuration.value = booking.duration_minutes || 60;
   els.bookingEditNotes.value = booking.notes || "";
   els.completeBookingFromDialog.textContent = booking.status === "Completed" ? "View/Edit Lesson Notes" : "Complete & Add Notes";
-  els.bookingEditMessage.textContent = "";
+  const editControls = [
+    els.bookingEditStudent, els.bookingEditTutor, els.bookingEditDate, els.bookingEditTime,
+    els.bookingEditDuration, els.bookingEditNotes, els.completeBookingFromDialog,
+    els.cancelBookingButton,
+  ];
+  editControls.forEach((control) => { control.disabled = bookingLocked; });
+  els.deleteBookingButton.disabled = bookingLocked || (currentUser.role !== "Master" && booking.status === "Completed");
+  els.bookingEditForm.querySelector('button[type="submit"]').disabled = bookingLocked;
+  els.bookingEditMessage.textContent = bookingLocked
+    ? "This month is locked for invoicing. Details are view-only."
+    : (currentUser.role !== "Master" && booking.status === "Completed" ? "Completed lessons cannot be deleted by tutors." : "");
   els.bookingDialog.showModal();
 }
 
 async function saveBookingEdit(event) {
   event.preventDefault();
-  await api(`/api/bookings/${els.bookingEditId.value}/update`, {
-    method: "POST",
-    body: JSON.stringify({
-      student_id: els.bookingEditStudent.value,
-      tutor_id: currentUser.role === "Master" ? els.bookingEditTutor.value : currentUser.user_id,
-      start_at: `${els.bookingEditDate.value}T${els.bookingEditTime.value}:00`,
-      duration_minutes: els.bookingEditDuration.value,
-      notes: els.bookingEditNotes.value,
-    }),
-  });
-  els.bookingDialog.close();
-  await loadCalendar();
-  await loadHome();
+  try {
+    await api(`/api/bookings/${els.bookingEditId.value}/update`, {
+      method: "POST",
+      body: JSON.stringify({
+        student_id: els.bookingEditStudent.value,
+        tutor_id: currentUser.role === "Master" ? els.bookingEditTutor.value : currentUser.user_id,
+        start_at: `${els.bookingEditDate.value}T${els.bookingEditTime.value}:00`,
+        duration_minutes: els.bookingEditDuration.value,
+        notes: els.bookingEditNotes.value,
+      }),
+    });
+    els.bookingDialog.close();
+    await loadCalendar();
+    await loadHome();
+  } catch (error) {
+    els.bookingEditMessage.textContent = error.message;
+  }
 }
 
 async function cancelBooking() {
   if (!confirm("Cancel this lesson?")) return;
-  await api(`/api/bookings/${els.bookingEditId.value}/cancel`, { method: "POST", body: "{}" });
-  els.bookingDialog.close();
-  await loadCalendar();
-  await loadHome();
+  try {
+    await api(`/api/bookings/${els.bookingEditId.value}/cancel`, { method: "POST", body: "{}" });
+    els.bookingDialog.close();
+    await loadCalendar();
+    await loadHome();
+  } catch (error) {
+    els.bookingEditMessage.textContent = error.message;
+  }
 }
 
 async function deleteBooking() {
-  if (!confirm("Delete this lesson permanently?")) return;
-  await api(`/api/bookings/${els.bookingEditId.value}/delete`, { method: "POST", body: "{}" });
-  els.bookingDialog.close();
-  await loadCalendar();
-  await loadHome();
+  if (!confirm("Delete this mistaken lesson entry permanently? This cannot be undone.")) return;
+  try {
+    await api(`/api/bookings/${els.bookingEditId.value}/delete`, { method: "POST", body: "{}" });
+    els.bookingDialog.close();
+    await loadCalendar();
+    await loadHome();
+  } catch (error) {
+    els.bookingEditMessage.textContent = error.message;
+  }
 }
 
 async function saveBooking(event) {
@@ -827,20 +893,24 @@ async function saveBooking(event) {
   const student = students.find((item) => String(item.student_id) === String(els.bookingStudent.value));
   const tutorId = currentUser.role === "Master" ? els.bookingTutor.value || student?.assigned_tutor_id : currentUser.user_id;
   els.bookingMessage.textContent = "Adding booking...";
-  await api("/api/bookings", {
-    method: "POST",
-    body: JSON.stringify({
-      student_id: els.bookingStudent.value,
-      tutor_id: tutorId,
-      start_at: `${els.bookingDate.value}T${els.bookingTime.value}:00`,
-      duration_minutes: els.bookingDuration.value,
-      repeat_weeks: els.bookingRepeat.value,
-      notes: els.bookingNotes.value,
-    }),
-  });
-  els.bookingMessage.textContent = "Booking added.";
-  await loadCalendar();
-  await loadHome();
+  try {
+    await api("/api/bookings", {
+      method: "POST",
+      body: JSON.stringify({
+        student_id: els.bookingStudent.value,
+        tutor_id: tutorId,
+        start_at: `${els.bookingDate.value}T${els.bookingTime.value}:00`,
+        duration_minutes: els.bookingDuration.value,
+        repeat_weeks: els.bookingRepeat.value,
+        notes: els.bookingNotes.value,
+      }),
+    });
+    els.bookingMessage.textContent = "Booking added.";
+    await loadCalendar();
+    await loadHome();
+  } catch (error) {
+    els.bookingMessage.textContent = error.message;
+  }
 }
 
 function openCompleteDialog(bookingId) {
@@ -851,21 +921,31 @@ function openCompleteDialog(bookingId) {
   els.attendanceStatus.value = booking.attendance_status || "Completed";
   els.parentSummary.value = booking.parent_summary || "";
   els.emailParent.checked = booking.status !== "Completed";
-  els.completeMessage.textContent = "";
+  const bookingLocked = Boolean(booking.month_locked);
+  els.completeForm.querySelectorAll("select, textarea, input, button[type='submit']").forEach((control) => {
+    control.disabled = bookingLocked;
+  });
+  els.completeMessage.textContent = bookingLocked ? "This month is locked for invoicing. Lesson notes are view-only." : "";
   els.completeDialog.showModal();
 }
 
 async function completeLesson(event) {
   event.preventDefault();
   const booking = bookings.find((item) => Number(item.booking_id) === Number(els.completeBookingId.value));
-  const data = await api(`/api/bookings/${els.completeBookingId.value}/complete`, {
-    method: "POST",
-    body: JSON.stringify({
-      attendance_status: els.attendanceStatus.value,
-      parent_summary: els.parentSummary.value,
-      emailed_to_parent: els.emailParent.checked,
-    }),
-  });
+  let data;
+  try {
+    data = await api(`/api/bookings/${els.completeBookingId.value}/complete`, {
+      method: "POST",
+      body: JSON.stringify({
+        attendance_status: els.attendanceStatus.value,
+        parent_summary: els.parentSummary.value,
+        emailed_to_parent: els.emailParent.checked,
+      }),
+    });
+  } catch (error) {
+    els.completeMessage.textContent = error.message;
+    return;
+  }
   if (els.emailParent.checked) {
     const subject = `Lesson Notes - ${data.student_name}`;
     const body = `Student: ${data.student_name}\n\n${els.parentSummary.value}\n\nKind regards,\nSWL Education Ltd`;
@@ -1019,18 +1099,26 @@ function openTimesheetPdf() {
 }
 
 async function submitTimesheet() {
-  await api("/api/timesheet/submit", { method: "POST", body: JSON.stringify({ month: els.timesheetMonth.value }) });
-  els.timesheetSummary.textContent = "Timesheet marked as submitted to Scott.";
-  await loadTimesheet();
+  try {
+    await api("/api/timesheet/submit", { method: "POST", body: JSON.stringify({ month: els.timesheetMonth.value }) });
+    els.timesheetSummary.textContent = "Timesheet marked as submitted to Scott.";
+    await loadTimesheet();
+  } catch (error) {
+    els.timesheetSummary.textContent = error.message;
+  }
 }
 
 async function setTimesheetStatus(status) {
   if (currentUser.role !== "Master" || !els.timesheetTutor.value) return;
-  await api("/api/timesheet/status", {
-    method: "POST",
-    body: JSON.stringify({ month: els.timesheetMonth.value, tutor_id: els.timesheetTutor.value, status }),
-  });
-  await loadTimesheet();
+  try {
+    await api("/api/timesheet/status", {
+      method: "POST",
+      body: JSON.stringify({ month: els.timesheetMonth.value, tutor_id: els.timesheetTutor.value, status }),
+    });
+    await loadTimesheet();
+  } catch (error) {
+    els.timesheetSummary.textContent = error.message;
+  }
 }
 
 async function loadReports() {
@@ -1185,6 +1273,7 @@ els.completeBookingFromDialog.addEventListener("click", () => {
 els.cancelBookingButton.addEventListener("click", cancelBooking);
 els.deleteBookingButton.addEventListener("click", deleteBooking);
 els.calendarMonth.addEventListener("change", loadCalendar);
+els.toggleMonthLock.addEventListener("click", toggleMonthLock);
 els.homeMonth.addEventListener("change", loadHome);
 els.completedPeriod.addEventListener("change", () => {
   updateCompletedPeriodFields();

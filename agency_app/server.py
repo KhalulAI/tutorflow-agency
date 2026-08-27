@@ -345,6 +345,13 @@ def init_db() -> None:
                 FOREIGN KEY(tutor_id) REFERENCES users(user_id) ON DELETE CASCADE,
                 FOREIGN KEY(uploaded_by) REFERENCES users(user_id) ON DELETE SET NULL
             );
+
+            CREATE TABLE IF NOT EXISTS month_locks (
+                month TEXT PRIMARY KEY,
+                locked_by INTEGER,
+                locked_at TEXT NOT NULL,
+                FOREIGN KEY(locked_by) REFERENCES users(user_id) ON DELETE SET NULL
+            );
             """
         )
         ensure_column(conn, "lesson_records", "timesheet_status", "TEXT NOT NULL DEFAULT 'Draft'")
@@ -511,6 +518,24 @@ def query_period(query):
     start_dt = datetime(today.year, today.month, 1)
     end_dt = datetime(today.year + (today.month == 12), 1 if today.month == 12 else today.month + 1, 1)
     return start_dt.isoformat(), end_dt.isoformat()
+
+
+def normalize_month(value: str) -> str:
+    month = str(value or "").strip()
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
+        raise ValueError("Choose a valid calendar month.")
+    return month
+
+
+def month_is_locked(conn, value: str) -> bool:
+    month = normalize_month(str(value)[:7])
+    return bool(conn.execute("SELECT 1 FROM month_locks WHERE month = ?", (month,)).fetchone())
+
+
+def locked_month_message(value: str) -> str:
+    month = normalize_month(str(value)[:7])
+    label = datetime.strptime(month, "%Y-%m").strftime("%B %Y")
+    return f"{label} is locked for invoicing. Unlock the month from the Calendar before making changes."
 
 
 def financial_lessons(conn, start_date: date, end_date: date):
@@ -1075,9 +1100,21 @@ class Handler(SimpleHTTPRequestHandler):
             start, end = query_period({"month": [month]})
             where, params = self.visible_booking_filter(user, "AND")
             with db() as conn:
+                month_lock = conn.execute(
+                    """
+                    SELECT ml.month, ml.locked_at, u.name AS locked_by_name
+                    FROM month_locks ml
+                    LEFT JOIN users u ON u.user_id = ml.locked_by
+                    WHERE ml.month = ?
+                    """,
+                    (normalize_month(month),),
+                ).fetchone()
                 bookings = rows(conn.execute(
                     f"""
                     SELECT b.*, s.student_name, s.parent_email, u.name AS tutor_name,
+                           CASE WHEN EXISTS (
+                             SELECT 1 FROM month_locks ml WHERE ml.month = SUBSTR(b.start_at, 1, 7)
+                           ) THEN 1 ELSE 0 END AS month_locked,
                            lr.parent_summary, lr.attendance_status, lr.emailed_to_parent
                     FROM bookings b
                     JOIN students s ON s.student_id = b.student_id
@@ -1088,7 +1125,11 @@ class Handler(SimpleHTTPRequestHandler):
                     """,
                     [start, end, *params],
                 ))
-            return self.send_json({"bookings": bookings})
+            return self.send_json({
+                "bookings": bookings,
+                "month_locked": bool(month_lock),
+                "month_lock": dict(month_lock) if month_lock else None,
+            })
 
         if path == "/api/reports/lessons":
             try:
@@ -1246,7 +1287,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if not DATABASE_URL and DB_PATH.exists():
                     archive.write(DB_PATH, "agency.sqlite3")
                 with db() as conn:
-                    for table in ("users", "students", "bookings", "lesson_records", "expenses"):
+                    for table in ("users", "students", "bookings", "lesson_records", "expenses", "month_locks"):
                         archive.writestr(
                             f"{table}.json",
                             json.dumps(rows(conn.execute(f"SELECT * FROM {table}")), indent=2),
@@ -1740,6 +1781,20 @@ class Handler(SimpleHTTPRequestHandler):
                     """,
                     (student_id, student_id),
                 ).fetchone()
+                if mode == "delete" and conn.execute(
+                    """
+                    SELECT 1
+                    FROM bookings b
+                    JOIN month_locks ml ON ml.month = SUBSTR(b.start_at, 1, 7)
+                    WHERE b.student_id = ?
+                    LIMIT 1
+                    """,
+                    (student_id,),
+                ).fetchone():
+                    return self.send_json(
+                        {"error": "This student has lessons in a locked invoicing month. Unlock the affected month before deleting the student and their records."},
+                        423,
+                    )
                 if mode == "unassign":
                     conn.execute("UPDATE students SET assigned_tutor_id = NULL WHERE student_id = ?", (student_id,))
                 elif mode == "archive":
@@ -1788,6 +1843,30 @@ class Handler(SimpleHTTPRequestHandler):
                 conn.execute("DELETE FROM expenses WHERE expense_id = ?", (expense_id,))
             return self.send_json({"ok": True})
 
+        if path == "/api/month-locks":
+            if not self.require_master():
+                return
+            try:
+                month = normalize_month(payload.get("month", ""))
+            except ValueError as error:
+                return self.send_json({"error": str(error)}, 400)
+            locked = bool(payload.get("locked"))
+            with db() as conn:
+                if locked:
+                    conn.execute(
+                        """
+                        INSERT INTO month_locks (month, locked_by, locked_at)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(month) DO UPDATE SET
+                          locked_by = excluded.locked_by,
+                          locked_at = excluded.locked_at
+                        """,
+                        (month, user["user_id"], now_iso()),
+                    )
+                else:
+                    conn.execute("DELETE FROM month_locks WHERE month = ?", (month,))
+            return self.send_json({"ok": True, "month": month, "locked": locked})
+
         if path == "/api/bookings":
             tutor_id = int(payload.get("tutor_id") or user["user_id"])
             if user["role"] != "Master" and tutor_id != user["user_id"]:
@@ -1796,7 +1875,11 @@ class Handler(SimpleHTTPRequestHandler):
             if repeat not in {1, 4, 8, 12, 24}:
                 return self.send_json({"error": "Choose one-off, 4, 8, 12, or 24 weeks."}, 400)
             start = datetime.fromisoformat(payload["start_at"])
+            item_starts = [start + timedelta(days=7 * week) for week in range(max(1, repeat))]
             with db() as conn:
+                locked_start = next((item for item in item_starts if month_is_locked(conn, item.isoformat())), None)
+                if locked_start:
+                    return self.send_json({"error": locked_month_message(locked_start.isoformat())}, 423)
                 student = conn.execute(
                     "SELECT student_id, assigned_tutor_id, active FROM students WHERE student_id = ?",
                     (int(payload["student_id"]),),
@@ -1811,8 +1894,7 @@ class Handler(SimpleHTTPRequestHandler):
                 ).fetchone()
                 if not tutor:
                     return self.send_json({"error": "Choose an active tutor for this booking."}, 400)
-                for week in range(max(1, repeat)):
-                    item_start = start + timedelta(days=7 * week)
+                for item_start in item_starts:
                     conn.execute(
                         """
                         INSERT INTO bookings
@@ -1850,6 +1932,8 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.send_json({"error": "Booking not found."}, 404)
                 if user["role"] != "Master" and booking["tutor_id"] != user["user_id"]:
                     return self.send_json({"error": "You can only complete your own lessons."}, 403)
+                if month_is_locked(conn, booking["start_at"]):
+                    return self.send_json({"error": locked_month_message(booking["start_at"])}, 423)
                 conn.execute("UPDATE bookings SET status = 'Completed' WHERE booking_id = ?", (booking_id,))
                 conn.execute(
                     """
@@ -1918,6 +2002,11 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.send_json({"error": "Booking not found."}, 404)
                 if user["role"] != "Master" and booking["tutor_id"] != user["user_id"]:
                     return self.send_json({"error": "You can only edit your own lessons."}, 403)
+                new_start = datetime.fromisoformat(payload["start_at"]).replace(microsecond=0).isoformat()
+                if month_is_locked(conn, booking["start_at"]):
+                    return self.send_json({"error": locked_month_message(booking["start_at"])}, 423)
+                if month_is_locked(conn, new_start):
+                    return self.send_json({"error": locked_month_message(new_start)}, 423)
                 tutor_id = int(payload.get("tutor_id") or booking["tutor_id"])
                 if user["role"] != "Master" and tutor_id != user["user_id"]:
                     return self.send_json({"error": "Tutors can only keep lessons assigned to themselves."}, 403)
@@ -1936,7 +2025,7 @@ class Handler(SimpleHTTPRequestHandler):
                     (
                         int(payload["student_id"]),
                         tutor_id,
-                        datetime.fromisoformat(payload["start_at"]).replace(microsecond=0).isoformat(),
+                        new_start,
                         int(payload.get("duration_minutes") or 60),
                         payload.get("notes", ""),
                         booking_id,
@@ -1952,20 +2041,43 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.send_json({"error": "Booking not found."}, 404)
                 if user["role"] != "Master" and booking["tutor_id"] != user["user_id"]:
                     return self.send_json({"error": "You can only cancel your own lessons."}, 403)
+                if month_is_locked(conn, booking["start_at"]):
+                    return self.send_json({"error": locked_month_message(booking["start_at"])}, 423)
                 conn.execute("UPDATE bookings SET status = 'Cancelled' WHERE booking_id = ?", (booking_id,))
             return self.send_json({"ok": True})
 
         if path.startswith("/api/bookings/") and path.endswith("/delete"):
-            if not self.require_master():
-                return
             booking_id = int(path.split("/")[3])
             with db() as conn:
+                booking = conn.execute(
+                    """
+                    SELECT b.*, CASE WHEN lr.lesson_record_id IS NULL THEN 0 ELSE 1 END AS has_lesson_record
+                    FROM bookings b
+                    LEFT JOIN lesson_records lr ON lr.booking_id = b.booking_id
+                    WHERE b.booking_id = ?
+                    """,
+                    (booking_id,),
+                ).fetchone()
+                if not booking:
+                    return self.send_json({"error": "Booking not found."}, 404)
+                if user["role"] != "Master" and booking["tutor_id"] != user["user_id"]:
+                    return self.send_json({"error": "You can only delete your own lessons."}, 403)
+                if month_is_locked(conn, booking["start_at"]):
+                    return self.send_json({"error": locked_month_message(booking["start_at"])}, 423)
+                if user["role"] != "Master" and (booking["status"] == "Completed" or booking["has_lesson_record"]):
+                    return self.send_json(
+                        {"error": "A completed lesson cannot be deleted by a tutor because it has a lesson record. Ask the master account to correct it."},
+                        409,
+                    )
                 conn.execute("DELETE FROM bookings WHERE booking_id = ?", (booking_id,))
             return self.send_json({"ok": True})
 
         if path == "/api/timesheet/submit":
-            start, end = query_period({"month": [payload.get("month", datetime.now().strftime("%Y-%m"))]})
+            month = normalize_month(payload.get("month", datetime.now().strftime("%Y-%m")))
+            start, end = query_period({"month": [month]})
             with db() as conn:
+                if month_is_locked(conn, month):
+                    return self.send_json({"error": locked_month_message(month)}, 423)
                 conn.execute(
                     "UPDATE lesson_records SET timesheet_submitted = 1, timesheet_status = 'Submitted' WHERE tutor_id = ? AND completed_at >= ? AND completed_at < ?",
                     (user["user_id"], start, end),
@@ -1975,12 +2087,15 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/timesheet/status":
             if not self.require_master():
                 return
-            start, end = query_period({"month": [payload.get("month", datetime.now().strftime("%Y-%m"))]})
+            month = normalize_month(payload.get("month", datetime.now().strftime("%Y-%m")))
+            start, end = query_period({"month": [month]})
             status = payload.get("status", "Submitted")
             if status not in {"Submitted", "Approved", "Queried"}:
                 return self.send_json({"error": "Choose Submitted, Approved, or Queried."}, 400)
             tutor_id = int(payload["tutor_id"])
             with db() as conn:
+                if month_is_locked(conn, month):
+                    return self.send_json({"error": locked_month_message(month)}, 423)
                 conn.execute(
                     "UPDATE lesson_records SET timesheet_status = ?, timesheet_submitted = 1 WHERE tutor_id = ? AND completed_at >= ? AND completed_at < ?",
                     (status, tutor_id, start, end),

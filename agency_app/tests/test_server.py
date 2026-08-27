@@ -621,6 +621,124 @@ class AgencyApiTests(unittest.TestCase):
         self.assertEqual(expense_error.exception.code, 403)
 
 
+    def test_tutor_can_delete_mistaken_booking_but_month_lock_prevents_changes(self):
+        self.login_as_master()
+        _, created = self.api(
+            "/api/users",
+            "POST",
+            {"name": "Calendar Tutor", "email": "calendar@example.com", "hourly_rate": 40},
+        )
+        _, users = self.api("/api/users")
+        tutor = next(item for item in users["users"] if item["email"] == "calendar@example.com")
+        self.api(
+            "/api/students",
+            "POST",
+            {"student_name": "Calendar Student", "assigned_tutor_id": tutor["user_id"]},
+        )
+        _, student_data = self.api("/api/students")
+        student_id = student_data["students"][0]["student_id"]
+        start_at = "2026-09-10T16:00:00"
+
+        self.api(
+            "/api/bookings",
+            "POST",
+            {"student_id": student_id, "tutor_id": tutor["user_id"], "start_at": start_at},
+        )
+        _, booking_data = self.api("/api/bookings?month=2026-09")
+        first_booking_id = booking_data["bookings"][0]["booking_id"]
+
+        tutor_opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        self.api(
+            "/api/login",
+            "POST",
+            {"email": "calendar@example.com", "password": created["temporary_password"]},
+            opener=tutor_opener,
+        )
+        self.api(f"/api/bookings/{first_booking_id}/delete", "POST", {}, opener=tutor_opener)
+        _, after_tutor_delete = self.api("/api/bookings?month=2026-09")
+        self.assertEqual(after_tutor_delete["bookings"], [])
+
+        self.api(
+            "/api/bookings",
+            "POST",
+            {"student_id": student_id, "tutor_id": tutor["user_id"], "start_at": start_at},
+        )
+        _, booking_data = self.api("/api/bookings?month=2026-09")
+        booking_id = booking_data["bookings"][0]["booking_id"]
+
+        with self.assertRaises(HTTPError) as tutor_lock_error:
+            self.api(
+                "/api/month-locks",
+                "POST",
+                {"month": "2026-09", "locked": True},
+                opener=tutor_opener,
+            )
+        self.assertEqual(tutor_lock_error.exception.code, 403)
+
+        self.api("/api/month-locks", "POST", {"month": "2026-09", "locked": True})
+        _, locked_calendar = self.api("/api/bookings?month=2026-09")
+        self.assertTrue(locked_calendar["month_locked"])
+        self.assertTrue(locked_calendar["bookings"][0]["month_locked"])
+
+        locked_requests = [
+            (f"/api/bookings/{booking_id}/delete", {}),
+            (f"/api/bookings/{booking_id}/cancel", {}),
+            (f"/api/bookings/{booking_id}/complete", {"parent_summary": "Locked", "emailed_to_parent": False}),
+            (
+                f"/api/bookings/{booking_id}/update",
+                {
+                    "student_id": student_id,
+                    "tutor_id": tutor["user_id"],
+                    "start_at": "2026-09-11T16:00:00",
+                    "duration_minutes": 60,
+                },
+            ),
+            (
+                "/api/bookings",
+                {"student_id": student_id, "tutor_id": tutor["user_id"], "start_at": "2026-09-12T16:00:00"},
+            ),
+            (
+                "/api/bookings",
+                {
+                    "student_id": student_id,
+                    "tutor_id": tutor["user_id"],
+                    "start_at": "2026-08-31T16:00:00",
+                    "repeat_weeks": 4,
+                },
+            ),
+            ("/api/timesheet/submit", {"month": "2026-09"}),
+        ]
+        for path, payload in locked_requests:
+            with self.subTest(path=path), self.assertRaises(HTTPError) as locked_error:
+                self.api(path, "POST", payload, opener=tutor_opener)
+            self.assertEqual(locked_error.exception.code, 423)
+
+        with self.assertRaises(HTTPError) as master_delete_error:
+            self.api(f"/api/bookings/{booking_id}/delete", "POST", {})
+        self.assertEqual(master_delete_error.exception.code, 423)
+        with self.assertRaises(HTTPError) as timesheet_status_error:
+            self.api(
+                "/api/timesheet/status",
+                "POST",
+                {"month": "2026-09", "tutor_id": tutor["user_id"], "status": "Approved"},
+            )
+        self.assertEqual(timesheet_status_error.exception.code, 423)
+        with self.assertRaises(HTTPError) as student_delete_error:
+            self.api(f"/api/students/{student_id}/remove", "POST", {"mode": "delete"})
+        self.assertEqual(student_delete_error.exception.code, 423)
+
+        self.api("/api/month-locks", "POST", {"month": "2026-09", "locked": False})
+        self.api(
+            f"/api/bookings/{booking_id}/complete",
+            "POST",
+            {"parent_summary": "Completed lesson", "emailed_to_parent": False},
+            opener=tutor_opener,
+        )
+        with self.assertRaises(HTTPError) as completed_delete_error:
+            self.api(f"/api/bookings/{booking_id}/delete", "POST", {}, opener=tutor_opener)
+        self.assertEqual(completed_delete_error.exception.code, 409)
+
+
 class TimesheetPdfTests(unittest.TestCase):
     def test_pdf_is_branded_and_excludes_school_year(self):
         pdf = server.build_timesheet_pdf(

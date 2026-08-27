@@ -178,6 +178,30 @@ nav {
 
 .page-head input { max-width: 180px; }
 
+.calendar-lock-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  align-items: center;
+}
+
+.calendar-lock-controls input { width: 180px; }
+
+.pill.locked {
+  border-color: color-mix(in srgb, #9b2f2f 35%, var(--line));
+  background: #f9e8e5;
+  color: #7b2525;
+}
+
+.calendar-workspace.month-locked .calendar-panel {
+  border-color: color-mix(in srgb, #9b2f2f 32%, var(--line));
+}
+
+.calendar-workspace.month-locked .booking-chip {
+  cursor: default;
+}
+
 .grid-two {
   display: grid;
   grid-template-columns: minmax(280px, .7fr) minmax(420px, 1.3fr);
@@ -189,9 +213,19 @@ nav {
 
 #students .grid-two {
   grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 
-.student-directory-panel { min-width: 0; }
+#students .grid-two > * { min-width: 0; }
+
+.student-directory-panel {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
 
 .directory-heading {
   display: flex;
@@ -203,8 +237,11 @@ nav {
 .directory-heading .muted-copy { margin-top: 5px; }
 
 .table-wrap {
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   overflow-x: auto;
+  overscroll-behavior-inline: contain;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: #fff;
@@ -212,7 +249,7 @@ nav {
 
 .student-table {
   width: 100%;
-  min-width: 980px;
+  min-width: 860px;
   border-collapse: collapse;
   font-size: .88rem;
 }
@@ -244,13 +281,11 @@ nav {
 .student-table .archived-row { opacity: .68; }
 
 .table-actions {
-  display: flex;
-  gap: 6px;
-  justify-content: flex-end;
   white-space: nowrap;
 }
 
 .table-actions button {
+  margin: 2px;
   min-height: 32px;
   padding: 6px 9px;
   font-size: .76rem;
@@ -616,6 +651,7 @@ body.tutor .master-booking-field {
   .stat-grid { grid-template-columns: 1fr 1fr; }
   .vat-chart { grid-template-columns: repeat(12, 64px); }
   .calendar-grid { grid-template-columns: repeat(2, 1fr); }
+  .calendar-lock-controls { justify-content: flex-start; }
 }
 
 @media (max-width: 640px) {
