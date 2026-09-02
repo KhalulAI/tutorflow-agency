@@ -220,11 +220,20 @@ nav {
 
 #students .grid-two > * { min-width: 0; }
 
+#students.page.active { align-content: start; }
+
+/* The add-student form is hidden for tutors, so do not leave its narrow column. */
+body.tutor #students .grid-two { grid-template-columns: minmax(0, 1fr); }
+
+#studentList { min-width: 0; max-width: 100%; }
+
 .student-directory-panel {
   width: 100%;
   max-width: 100%;
   min-width: 0;
   overflow: hidden;
+  container-type: inline-size;
+  container-name: student-directory;
 }
 
 .directory-heading {
@@ -232,11 +241,15 @@ nav {
   justify-content: space-between;
   gap: 16px;
   align-items: start;
+  flex-wrap: wrap;
 }
+
+.directory-heading > div { min-width: 0; overflow-wrap: anywhere; }
 
 .directory-heading .muted-copy { margin-top: 5px; }
 
 .table-wrap {
+  position: relative;
   width: 100%;
   max-width: 100%;
   min-width: 0;
@@ -279,6 +292,53 @@ nav {
 .student-table td small { display: block; margin-top: 2px; color: var(--muted); white-space: nowrap; }
 .student-table .email-cell { max-width: 240px; overflow-wrap: anywhere; }
 .student-table .archived-row { opacity: .68; }
+
+/* Tutor accounts have fewer columns and must fit without a fixed table width. */
+body.tutor .student-table { min-width: 0; table-layout: fixed; }
+body.tutor .student-table th,
+body.tutor .student-table td { overflow-wrap: anywhere; white-space: normal; }
+body.tutor .student-table th:nth-child(1),
+body.tutor .student-table th:nth-child(2) { width: 18%; }
+body.tutor .student-table th:nth-child(3) { width: 26%; }
+body.tutor .student-table th:nth-child(4) { width: 16%; }
+body.tutor .student-table th:nth-child(5),
+body.tutor .student-table th:nth-child(6) { width: 11%; }
+body.tutor .student-table .pill { white-space: normal; }
+
+/* Use the panel width, not just the device width (also works with browser zoom). */
+@container student-directory (max-width: 700px) {
+  body.tutor .student-table,
+  body.tutor .student-table tbody { display: block; }
+  body.tutor .student-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  body.tutor .student-table tr {
+    display: grid;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  body.tutor .student-table tr:last-child { border-bottom: 0; }
+  body.tutor .student-table td {
+    display: grid;
+    grid-template-columns: minmax(0, 6rem) minmax(0, 1fr);
+    column-gap: 10px;
+    padding: 7px 0;
+    border: 0;
+    min-width: 0;
+    max-width: none;
+  }
+  body.tutor .student-table td::before {
+    content: attr(data-label);
+    color: var(--green);
+    font-weight: 800;
+  }
+  body.tutor .student-table td small { grid-column: 2; }
+  body.tutor .student-table .pill { justify-self: start; }
+}
 
 .table-actions {
   white-space: nowrap;
