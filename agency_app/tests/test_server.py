@@ -67,6 +67,9 @@ class AgencyApiTests(unittest.TestCase):
         return result["user"]
 
     def test_health_and_authentication(self):
+        _, business = self.api("/api/business")
+        self.assertEqual(business["business_name"], "SWL Education Ltd")
+        self.assertEqual(set(business), {"business_name", "app_name", "workspace_name", "personal_workspace"})
         status, health = self.api("/api/health")
         self.assertEqual(status, 200)
         self.assertEqual(health["status"], "ok")
@@ -213,6 +216,35 @@ class AgencyApiTests(unittest.TestCase):
         updated = updated_bookings["bookings"][0]
         self.assertEqual(updated["parent_summary"], "Excellent progress today.")
         self.assertEqual(updated["attendance_status"], "Completed")
+
+    def test_personal_owner_teaches_without_duplicate_tutor_cost(self):
+        user = self.login_as_master()
+        payload = {"student_name": "Personal Student", "parent_email": "parent@example.com",
+                   "assigned_tutor_id": user["user_id"], "hourly_rate": 100, "tutor_hourly_rate": 80}
+        # The agency must not gain the personal assignment behaviour.
+        with self.assertRaises(HTTPError) as error:
+            self.api("/api/students", "POST", payload)
+        self.assertEqual(error.exception.code, 400)
+        with patch.object(server, "PERSONAL_WORKSPACE", True):
+            self.api("/api/students", "POST", payload)
+            _, result = self.api("/api/students")
+            student_id = result["students"][0]["student_id"]
+            self.api(f"/api/students/{student_id}/update", "POST", payload)
+            start_at = datetime.now().replace(day=15, hour=16, minute=0, second=0, microsecond=0).isoformat()
+            self.api("/api/bookings", "POST", {"student_id": student_id, "tutor_id": user["user_id"],
+                     "start_at": start_at, "duration_minutes": 60})
+            _, result = self.api(f"/api/bookings?month={start_at[:7]}")
+            booking_id = result["bookings"][0]["booking_id"]
+            self.api(f"/api/bookings/{booking_id}/complete", "POST",
+                     {"attendance_status": "Completed", "parent_summary": "Personal lesson", "emailed_to_parent": False})
+            with server.db() as conn:
+                record = conn.execute("SELECT * FROM lesson_records WHERE booking_id = ?", (booking_id,)).fetchone()
+            self.assertEqual(record["client_hourly_rate"], 100)
+            self.assertEqual(record["tutor_hourly_rate"], 0)
+            _, result = self.api(f"/api/finance/summary?period=month&anchor={start_at[:10]}")
+            self.assertEqual(result["summary"]["gross_income"], 100)
+            self.assertEqual(result["summary"]["tutor_costs"], 0)
+
 
     def test_tutor_creation_and_password_reset_send_credentials(self):
         self.login_as_master()
@@ -740,6 +772,28 @@ class AgencyApiTests(unittest.TestCase):
 
 
 class TimesheetPdfTests(unittest.TestCase):
+    def test_personal_business_branding_and_zero_owner_cost(self):
+        with patch.object(server, "BUSINESS_NAME", "Scott Linger"), patch.object(
+            server, "APP_NAME", "Scott Linger - TutorFlow"
+        ), patch.object(server, "send_postmark_email", return_value="test") as send:
+            server.send_lesson_email("parent@example.com", "Example Student", "Good progress")
+            self.assertIn("Scott Linger", send.call_args.args[2])
+            self.assertNotIn("SWL Education", send.call_args.args[2])
+            server.send_tutor_credentials_email("tutor@example.com", "Scott", "not-a-real-password")
+            self.assertIn("Scott Linger - TutorFlow", send.call_args.args[1])
+            server.send_password_reset_email("tutor@example.com", "Scott", "test-token")
+            self.assertIn("Scott Linger", send.call_args.args[2])
+            pdf = server.build_timesheet_pdf([], {"name": "Scott", "email": "scott@example.com", "hourly_rate": 0}, "2026-09")
+            reader = PdfReader(BytesIO(pdf))
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            self.assertIn("SCOTT LINGER", text)
+            self.assertNotIn("SWL EDUCATION", text)
+            self.assertEqual(reader.metadata.author, "Scott Linger")
+            summary = server.calculate_finances([{"duration_minutes": 60, "student_rate": 100, "tutor_rate": 0}], [])
+            self.assertEqual(summary["net_income"], 100)
+            self.assertEqual(summary["tutor_costs"], 0)
+            self.assertIn("Scott Linger - Internal Finance Report", server.finance_csv(summary, [], "September"))
+
     def test_pdf_is_branded_and_excludes_school_year(self):
         pdf = server.build_timesheet_pdf(
             [{

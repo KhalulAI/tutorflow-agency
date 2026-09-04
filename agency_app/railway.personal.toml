@@ -1,0 +1,6 @@
+[deploy]
+startCommand = "python personal_server.py"
+healthcheckPath = "/api/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10

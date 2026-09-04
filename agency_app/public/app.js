@@ -1,5 +1,8 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+let businessName = "SWL Education Ltd";
+let personalWorkspace = false;
+let personalTeacher = null;
 
 const els = {
   authScreen: $("#authScreen"),
@@ -264,6 +267,15 @@ function showApp(user) {
 }
 
 async function start() {
+  const business = await api("/api/business");
+  businessName = business.business_name;
+  personalWorkspace = Boolean(business.personal_workspace);
+  document.title = business.app_name;
+  $("#authScreen .eyebrow").textContent = business.app_name;
+  $("#authScreen h1").textContent = `${business.workspace_name} Lesson Workspace`;
+  $(".sidebar h1").textContent = business.workspace_name;
+  $("#home .page-head h2").textContent = `${business.workspace_name} Dashboard`;
+  $("#backupHeading").textContent = `${business.workspace_name} Backup`;
   els.homeMonth.value = currentMonth();
   els.calendarMonth.value = currentMonth();
   els.completedMonth.value = currentMonth();
@@ -307,10 +319,14 @@ async function refreshBaseData() {
   ]);
   students = studentData.students;
   tutors = userData.users.filter((user) => user.role === "Tutor");
+  personalTeacher = personalWorkspace && currentUser.role === "Master"
+    ? userData.users.find((user) => user.user_id === currentUser.user_id) : null;
   renderSelects();
 }
 
 function renderSelects() {
+  // Include the owner for teaching selections, not tutor management actions.
+  const tutors = personalTeacher ? [personalTeacher, ...userTutors()] : userTutors();
   const activeTutors = tutors.filter((tutor) => tutor.active);
   const tutorOptions = `<option value="">Choose tutor</option>` + activeTutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
   els.assignedTutor.innerHTML = tutorOptions;
@@ -329,6 +345,8 @@ function renderSelects() {
   els.completedStudent.innerHTML = `<option value="">All students</option>` + students.map((student) => `<option value="${student.student_id}">${escapeHtml(student.student_name)}${student.active ? "" : " (Archived)"}</option>`).join("");
   els.bookingEditTutor.innerHTML = tutorOptions;
 }
+
+function userTutors() { return tutors; }
 
 async function setupMaster(event) {
   event.preventDefault();
@@ -656,6 +674,7 @@ function renderStudents() {
 }
 
 function effectiveStudentTutorRate(student) {
+  if (personalTeacher && Number(student.assigned_tutor_id) === Number(personalTeacher.user_id)) return 0;
   if (student.tutor_hourly_rate !== null && student.tutor_hourly_rate !== undefined && student.tutor_hourly_rate !== "") {
     return Number(student.tutor_hourly_rate);
   }
@@ -948,7 +967,7 @@ async function completeLesson(event) {
   }
   if (els.emailParent.checked) {
     const subject = `Lesson Notes - ${data.student_name}`;
-    const body = `Student: ${data.student_name}\n\n${els.parentSummary.value}\n\nKind regards,\nSWL Education Ltd`;
+    const body = `Student: ${data.student_name}\n\n${els.parentSummary.value}\n\nKind regards,\n${businessName}`;
     const href = `mailto:${encodeURIComponent(data.parent_email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     els.emailDraftPanel.hidden = false;
     if (data.email_sent) {
@@ -978,7 +997,7 @@ async function loadHome() {
     <article class="stat"><span class="eyebrow">Booked</span><strong>${monthBookings.length}</strong><small>This month</small></article>
     <article class="stat"><span class="eyebrow">Completed</span><strong>${done.length}</strong><small>Recorded lessons</small></article>
     <article class="stat"><span class="eyebrow">Need Notes</span><strong>${incomplete.length}</strong><small>Past lessons incomplete</small></article>
-    <article class="stat"><span class="eyebrow">Tutors</span><strong>${tutors.length}</strong><small>Agency accounts</small></article>
+    <article class="stat"><span class="eyebrow">Tutors</span><strong>${tutors.length}</strong><small>Tutor accounts</small></article>
   `;
   els.upcomingList.innerHTML = upcoming.length ? upcoming.map(bookingItem).join("") : `<div class="notice">No upcoming lessons this month.</div>`;
   els.completionList.innerHTML = incomplete.length ? incomplete.map(bookingItem).join("") : `<div class="notice">No overdue lesson notes.</div>`;

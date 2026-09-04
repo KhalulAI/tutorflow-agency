@@ -23,13 +23,18 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent
 PUBLIC = ROOT / "public"
-DATA = ROOT / "data"
+DATA = Path(os.environ.get("APP_DATA_DIR") or ROOT / "data")
 DB_PATH = DATA / "agency.sqlite3"
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+PERSONAL_WORKSPACE = os.environ.get("PERSONAL_WORKSPACE", "0") == "1"
 HOST = os.environ.get("HOST", "0.0.0.0")
 PORT = int(os.environ.get("PORT", "8010"))
 SESSION_COOKIE = "tutorflow_agency_session"
-POSTMARK_FROM_NAME = "SWL Education - TutorFlow"
+BUSINESS_NAME = os.environ.get("BUSINESS_NAME", "").strip() or "SWL Education Ltd"
+APP_NAME = os.environ.get("APP_NAME", "").strip() or "TutorFlow Agency"
+WORKSPACE_NAME = os.environ.get("WORKSPACE_NAME", "").strip() or "Agency"
+POSTMARK_FROM_NAME = os.environ.get("EMAIL_SENDER_NAME", "").strip() or "SWL Education - TutorFlow"
+BUSINESS_FILE_PREFIX = (re.sub(r"[^a-z0-9]+", "-", BUSINESS_NAME.lower()).strip("-") or "business") if BUSINESS_NAME != "SWL Education Ltd" else "swl-education"
 DEFAULT_VAT_THRESHOLD = 90_000.0
 MAX_TUTOR_DOCUMENT_BYTES = 5 * 1024 * 1024
 ALLOWED_TUTOR_DOCUMENT_TYPES = {
@@ -440,7 +445,7 @@ def send_lesson_email(recipient: str, student_name: str, summary: str, reply_to:
 {summary}
 
 Kind regards,
-SWL Education Ltd
+{BUSINESS_NAME}
 """
     return send_postmark_email(
         recipient,
@@ -455,7 +460,7 @@ def app_url() -> str:
     if configured:
         return configured
     railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
-    return f"https://{railway_domain}" if railway_domain else "the TutorFlow Agency website"
+    return f"https://{railway_domain}" if railway_domain else f"the {APP_NAME} website"
 
 
 def send_tutor_credentials_email(
@@ -466,17 +471,17 @@ def send_tutor_credentials_email(
     reset: bool = False,
 ) -> str:
     action = "reset" if reset else "created"
-    subject = "Your TutorFlow Agency password was reset" if reset else "Your TutorFlow Agency account"
+    subject = f"Your {APP_NAME} password was reset" if reset else f"Your {APP_NAME} account"
     body = f"""Hello {tutor_name},
 
-Your TutorFlow Agency account has been {action}.
+Your {APP_NAME} account has been {action}.
 
 Sign in: {app_url()}
 Email: {recipient}
 Temporary password: {temporary_password}
 
 Please sign in and change this temporary password from Settings as soon as possible.
-If you were not expecting this email, contact your agency administrator.
+If you were not expecting this email, contact your account administrator.
 """
     return send_postmark_email(recipient, subject, body, reply_to)
 
@@ -485,7 +490,7 @@ def send_password_reset_email(recipient: str, account_name: str, reset_token: st
     reset_url = f"{app_url()}/?reset_token={reset_token}"
     body = f"""Hello {account_name},
 
-A password reset was requested for your TutorFlow Agency account.
+A password reset was requested for your {APP_NAME} account.
 
 Choose a new password using this link:
 {reset_url}
@@ -494,7 +499,7 @@ The link expires in one hour and can only be used once. If you did not request
 this reset, you can ignore this email and your current password will continue to work.
 
 Kind regards,
-SWL Education Ltd
+{BUSINESS_NAME}
 """
     return send_postmark_email(recipient, "Reset your TutorFlow password", body)
 
@@ -572,7 +577,7 @@ def finance_csv(summary, expenses, period_label: str) -> str:
 
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(["SWL Education Ltd - Internal Finance Report"])
+    writer.writerow([f"{BUSINESS_NAME} - Internal Finance Report"])
     writer.writerow(["Period", period_label])
     writer.writerow([])
     writer.writerow(["Metric", "Amount (GBP)"])
@@ -689,8 +694,8 @@ def build_timesheet_pdf(lessons, tutor, month: str) -> bytes:
         rightMargin=15 * mm,
         topMargin=13 * mm,
         bottomMargin=15 * mm,
-        title=f"SWL Education Ltd - {period_label} Tutor Timesheet",
-        author="SWL Education Ltd",
+        title=f"{BUSINESS_NAME} - {period_label} Tutor Timesheet",
+        author=BUSINESS_NAME,
         subject="Monthly tutor timesheet",
     )
 
@@ -701,14 +706,14 @@ def build_timesheet_pdf(lessons, tutor, month: str) -> bytes:
         canvas.line(doc.leftMargin, 10 * mm, width - doc.rightMargin, 10 * mm)
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(muted)
-        canvas.drawString(doc.leftMargin, 6.5 * mm, "SWL Education Ltd | Tutor timesheet")
+        canvas.drawString(doc.leftMargin, 6.5 * mm, f"{BUSINESS_NAME} | Tutor timesheet")
         canvas.drawRightString(width - doc.rightMargin, 6.5 * mm, f"Page {doc.page}")
         canvas.restoreState()
 
     story = [
         Table(
             [[
-                Paragraph("SWL EDUCATION LTD", company_style),
+                Paragraph(escape(BUSINESS_NAME.upper()), company_style),
                 Paragraph("OFFICIAL TUTOR RECORD", ParagraphStyle("Record", parent=company_style, alignment=TA_RIGHT, textColor=gold)),
             ]],
             colWidths=[125 * mm, 132 * mm],
@@ -974,6 +979,11 @@ class Handler(SimpleHTTPRequestHandler):
         return self.send_json({"error": "Not found"}, 404)
 
     def route_get(self, path, query):
+        if path == "/api/business":
+            return self.send_json({"business_name": BUSINESS_NAME, "app_name": APP_NAME,
+                                   "workspace_name": WORKSPACE_NAME,
+                                   "personal_workspace": PERSONAL_WORKSPACE})
+
         if path == "/api/health":
             try:
                 with db() as conn:
@@ -1208,7 +1218,7 @@ class Handler(SimpleHTTPRequestHandler):
                 filename_month = re.sub(r"[^0-9-]+", "", month) or datetime.now().strftime("%Y-%m")
                 return self.send_bytes(
                     build_timesheet_pdf(lessons, tutor, month),
-                    f"swl-education-timesheet-{filename_month}-{filename_name}.pdf",
+                    f"{BUSINESS_FILE_PREFIX}-timesheet-{filename_month}-{filename_name}.pdf",
                     "application/pdf",
                 )
             return self.send_json({"lessons": lessons})
@@ -1255,7 +1265,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "series": rolling_series,
             }
             if query.get("format", [""])[0].lower() == "csv":
-                filename = f"swl-education-finance-{period}-{anchor.isoformat()}.csv"
+                filename = f"{BUSINESS_FILE_PREFIX}-finance-{period}-{anchor.isoformat()}.csv"
                 return self.send_csv(filename, finance_csv(summary, expenses, period_label))
             return self.send_json({
                 "period": period,
@@ -1281,7 +1291,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/backup":
             if not self.require_master():
                 return
-            filename = f"tutorflow-agency-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
+            filename = f"{BUSINESS_FILE_PREFIX}-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
             payload = BytesIO()
             with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED) as archive:
                 if not DATABASE_URL and DB_PATH.exists():
@@ -1684,8 +1694,8 @@ class Handler(SimpleHTTPRequestHandler):
             assigned_tutor_id = int(payload["assigned_tutor_id"]) if payload.get("assigned_tutor_id") else None
             with db() as conn:
                 if assigned_tutor_id and not conn.execute(
-                    "SELECT user_id FROM users WHERE user_id = ? AND role = 'Tutor' AND active = 1",
-                    (assigned_tutor_id,),
+                    "SELECT user_id FROM users WHERE user_id = ? AND (role = 'Tutor' OR (role = 'Master' AND ? = 1)) AND active = 1",
+                    (assigned_tutor_id, int(PERSONAL_WORKSPACE)),
                 ).fetchone():
                     return self.send_json({"error": "Choose an active tutor or leave the student unassigned."}, 400)
                 conn.execute(
@@ -1732,8 +1742,8 @@ class Handler(SimpleHTTPRequestHandler):
             assigned_tutor_id = int(payload["assigned_tutor_id"]) if payload.get("assigned_tutor_id") else None
             with db() as conn:
                 if assigned_tutor_id and not conn.execute(
-                    "SELECT user_id FROM users WHERE user_id = ? AND role = 'Tutor' AND active = 1",
-                    (assigned_tutor_id,),
+                    "SELECT user_id FROM users WHERE user_id = ? AND (role = 'Tutor' OR (role = 'Master' AND ? = 1)) AND active = 1",
+                    (assigned_tutor_id, int(PERSONAL_WORKSPACE)),
                 ).fetchone():
                     return self.send_json({"error": "Choose an active tutor or leave the student unassigned."}, 400)
                 conn.execute(
@@ -1919,7 +1929,7 @@ class Handler(SimpleHTTPRequestHandler):
             with db() as conn:
                 booking = conn.execute(
                     """
-                    SELECT b.*, s.parent_email, s.student_name, s.hourly_rate AS client_hourly_rate,
+                    SELECT b.*, u.role AS teacher_role, s.parent_email, s.student_name, s.hourly_rate AS client_hourly_rate,
                            COALESCE(s.tutor_hourly_rate, u.hourly_rate) AS tutor_hourly_rate
                     FROM bookings b
                     JOIN students s ON s.student_id = b.student_id
@@ -1959,7 +1969,7 @@ class Handler(SimpleHTTPRequestHandler):
                         0,
                         booking["duration_minutes"],
                         booking["client_hourly_rate"],
-                        booking["tutor_hourly_rate"],
+                        0 if PERSONAL_WORKSPACE and booking["teacher_role"] == "Master" else booking["tutor_hourly_rate"],
                         now_iso(),
                         now_iso(),
                     ),
@@ -2113,7 +2123,7 @@ class Handler(SimpleHTTPRequestHandler):
     def export_invoicing_csv(self, lessons, month):
         safe_month = "".join(character for character in str(month) if character.isdigit() or character == "-")
         return self.send_csv(
-            f"swl-education-month-end-{safe_month or 'report'}.csv",
+            f"{BUSINESS_FILE_PREFIX}-month-end-{safe_month or 'report'}.csv",
             self.csv_for_invoicing(lessons),
         )
 
@@ -2203,7 +2213,7 @@ class Handler(SimpleHTTPRequestHandler):
         return output.getvalue()
 
 
-if __name__ == "__main__":
+def main():
     attempts = 10 if DATABASE_URL else 1
     for attempt in range(1, attempts + 1):
         try:
@@ -2215,5 +2225,9 @@ if __name__ == "__main__":
             print(f"Database unavailable; retrying startup ({attempt}/{attempts})...", flush=True)
             time.sleep(2)
     PUBLIC.mkdir(exist_ok=True)
-    print(f"TutorFlow Agency running at http://{HOST}:{PORT}", flush=True)
+    print(f"{APP_NAME} running at http://{HOST}:{PORT}", flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()

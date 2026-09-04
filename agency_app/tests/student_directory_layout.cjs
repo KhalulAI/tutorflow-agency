@@ -26,10 +26,11 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
           ...(role === 'Master' ? { hourly_rate: 130, tutor_hourly_rate: 80 } : {}),
         };
         const responses = {
+          '/api/business': { business_name: 'Scott Linger', app_name: 'Scott Linger - TutorFlow', workspace_name: 'Scott Linger', personal_workspace: true },
           '/api/setup-status': { has_master: true },
           '/api/session': { user },
           '/api/students': { students: [student, { ...student, student_id: 2, student_name: 'Second Student', active: 0 }] },
-          '/api/users': { users: [{ ...user, role: 'Tutor' }] },
+          '/api/users': { users: [user, { ...user, user_id: 3, role: 'Tutor' }] },
           '/api/bookings': { bookings: [], month_locked: false },
           '/api/reports/lessons': { lessons: [] },
         };
@@ -47,6 +48,13 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
       });
       await page.goto('http://tutorflow.test/');
       await page.waitForFunction(() => document.querySelector('#bookingStudent').options.length > 1);
+      assert.equal(await page.title(), 'Scott Linger - TutorFlow');
+      assert.equal(await page.locator('.sidebar h1').textContent(), 'Scott Linger');
+      if (role === 'Master') {
+        assert.equal(await page.locator('#assignedTutor option[value="2"]').count(), 1);
+        assert.equal(await page.locator('#bookingTutor option[value="2"]').count(), 1);
+        assert.equal(await page.locator('#timesheetTutor option[value="2"]').count(), 1);
+      }
       await page.getByRole('button', { name: 'Students', exact: true }).click();
       for (const width of (role === 'Tutor' ? [320, 375, 640, 768, 980, 1024, 1280, 1920] : [1024, 1280, 1920])) {
         await page.setViewportSize({ width, height: 900 });
