@@ -226,6 +226,9 @@ class AgencyApiTests(unittest.TestCase):
             self.api("/api/students", "POST", payload)
         self.assertEqual(error.exception.code, 400)
         with patch.object(server, "PERSONAL_WORKSPACE", True):
+            with self.assertRaises(HTTPError) as tutor_error:
+                self.api("/api/users", "POST", {"name": "Not Allowed", "email": "other@example.com"})
+            self.assertEqual(tutor_error.exception.code, 404)
             self.api("/api/students", "POST", payload)
             _, result = self.api("/api/students")
             student_id = result["students"][0]["student_id"]
@@ -244,6 +247,17 @@ class AgencyApiTests(unittest.TestCase):
             _, result = self.api(f"/api/finance/summary?period=month&anchor={start_at[:10]}")
             self.assertEqual(result["summary"]["gross_income"], 100)
             self.assertEqual(result["summary"]["tutor_costs"], 0)
+            _, timesheet = self.api(f"/api/timesheet?month={start_at[:7]}&tutor_id=999999")
+            self.assertEqual(len(timesheet["lessons"]), 1)
+            self.assertEqual(timesheet["lessons"][0]["tutor_rate"], 100)
+            for path, request_payload in (
+                (f"/api/students/{student_id}/remove", {"mode": "unassign"}),
+                ("/api/timesheet/submit", {"month": start_at[:7]}),
+                ("/api/timesheet/status", {"month": start_at[:7], "tutor_id": user["user_id"], "status": "Approved"}),
+            ):
+                with self.assertRaises(HTTPError) as unavailable:
+                    self.api(path, "POST", request_payload)
+                self.assertIn(unavailable.exception.code, {400, 404})
 
 
     def test_tutor_creation_and_password_reset_send_credentials(self):
@@ -775,7 +789,9 @@ class TimesheetPdfTests(unittest.TestCase):
     def test_personal_business_branding_and_zero_owner_cost(self):
         with patch.object(server, "BUSINESS_NAME", "Scott Linger"), patch.object(
             server, "APP_NAME", "Scott Linger - TutorFlow"
-        ), patch.object(server, "send_postmark_email", return_value="test") as send:
+        ), patch.object(server, "PERSONAL_WORKSPACE", True), patch.object(
+            server, "send_postmark_email", return_value="test"
+        ) as send:
             server.send_lesson_email("parent@example.com", "Example Student", "Good progress")
             self.assertIn("Scott Linger", send.call_args.args[2])
             self.assertNotIn("SWL Education", send.call_args.args[2])
@@ -788,6 +804,8 @@ class TimesheetPdfTests(unittest.TestCase):
             text = "\n".join(page.extract_text() or "" for page in reader.pages)
             self.assertIn("SCOTT LINGER", text)
             self.assertNotIn("SWL EDUCATION", text)
+            self.assertIn("Monthly Teaching Record", text)
+            self.assertNotIn("Monthly Tutor Timesheet", text)
             self.assertEqual(reader.metadata.author, "Scott Linger")
             summary = server.calculate_finances([{"duration_minutes": 60, "student_rate": 100, "tutor_rate": 0}], [])
             self.assertEqual(summary["net_income"], 100)

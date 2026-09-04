@@ -270,12 +270,21 @@ async function start() {
   const business = await api("/api/business");
   businessName = business.business_name;
   personalWorkspace = Boolean(business.personal_workspace);
+  document.body.classList.toggle("personal-workspace", personalWorkspace);
   document.title = business.app_name;
   $("#authScreen .eyebrow").textContent = business.app_name;
   $("#authScreen h1").textContent = `${business.workspace_name} Lesson Workspace`;
   $(".sidebar h1").textContent = business.workspace_name;
   $("#home .page-head h2").textContent = `${business.workspace_name} Dashboard`;
   $("#backupHeading").textContent = `${business.workspace_name} Backup`;
+  if (personalWorkspace) {
+    $("#students .page-head h2").textContent = "My Students";
+    $("#studentDirectoryIntro").textContent = "A quick view of family contacts and lesson rates.";
+    $("#calendar .page-head h2").textContent = "My Calendar";
+    $("#timesheet .page-head h2").textContent = "My Monthly Timesheet";
+    $("#financeHeading").textContent = "Income & Expenses";
+    $("#financeEyebrow").textContent = "Personal Practice";
+  }
   els.homeMonth.value = currentMonth();
   els.calendarMonth.value = currentMonth();
   els.completedMonth.value = currentMonth();
@@ -629,8 +638,8 @@ async function saveStudent(event) {
       year_group: els.yearGroup.value,
       target_school: els.targetSchool.value,
       hourly_rate: els.studentRate.value,
-      tutor_hourly_rate: els.studentTutorRate.value,
-      assigned_tutor_id: els.assignedTutor.value,
+      tutor_hourly_rate: personalWorkspace ? 0 : els.studentTutorRate.value,
+      assigned_tutor_id: personalWorkspace ? currentUser.user_id : els.assignedTutor.value,
     }),
   });
   els.studentMessage.textContent = "Student saved.";
@@ -646,22 +655,23 @@ function renderStudents() {
     return;
   }
   const master = currentUser.role === "Master";
+  const personal = master && personalWorkspace;
   els.studentList.innerHTML = `
     <div class="table-wrap">
       <table class="student-table">
         <thead><tr>
-          <th>Student</th><th>Parent</th><th>Email</th><th>Tutor</th>
-          ${master ? `<th>Client rate</th><th>Tutor rate</th><th>Status</th><th><span class="sr-only">Actions</span></th>` : `<th>Your rate</th><th>Status</th>`}
+          <th>Student</th><th>Parent</th><th>Email</th>${personal ? "" : "<th>Tutor</th>"}
+          ${master ? `<th>${personal ? "Hourly charge" : "Client rate"}</th>${personal ? "" : "<th>Tutor rate</th>"}<th>Status</th><th><span class="sr-only">Actions</span></th>` : `<th>Your rate</th><th>Status</th>`}
         </tr></thead>
         <tbody>${students.map((student) => `
           <tr class="${student.active ? "" : "archived-row"}">
             <td data-label="Student"><strong>${escapeHtml(student.student_name)}</strong></td>
             <td data-label="Parent">${escapeHtml(student.parent_name || "—")}</td>
             <td data-label="Email" class="email-cell">${escapeHtml(student.parent_email || "—")}</td>
-            <td data-label="Tutor">${escapeHtml(student.tutor_name || "Unassigned")}</td>
+            ${personal ? "" : `<td data-label="Tutor">${escapeHtml(student.tutor_name || "Unassigned")}</td>`}
             ${master ? `
               <td data-label="Client rate"><strong>${money(student.hourly_rate)}</strong><small>/hr</small></td>
-              <td data-label="Tutor rate"><strong>${money(effectiveStudentTutorRate(student))}</strong><small>/hr${student.tutor_hourly_rate == null ? " · default" : " · custom"}</small></td>
+              ${personal ? "" : `<td data-label="Tutor rate"><strong>${money(effectiveStudentTutorRate(student))}</strong><small>/hr${student.tutor_hourly_rate == null ? " · default" : " · custom"}</small></td>`}
               <td data-label="Status"><span class="pill">${student.active ? "Active" : "Archived"}</span></td>
               <td class="table-actions"><button type="button" data-edit-student="${student.student_id}" aria-label="Edit ${escapeHtml(student.student_name)}">Edit</button><button class="ghost dark-ghost" type="button" data-remove-student="${student.student_id}" aria-label="Remove or unassign ${escapeHtml(student.student_name)}">Manage</button></td>
             ` : `<td data-label="Your rate"><strong>${money(student.tutor_rate)}</strong><small>/hr</small></td><td data-label="Status"><span class="pill">${student.active ? "Active" : "Archived"}</span></td>`}
@@ -712,8 +722,8 @@ async function saveStudentEdit(event) {
         year_group: els.studentEditYearGroup.value,
         target_school: els.studentEditTargetSchool.value,
         hourly_rate: els.studentEditRate.value,
-        tutor_hourly_rate: els.studentEditTutorRate.value,
-        assigned_tutor_id: els.studentEditTutor.value,
+        tutor_hourly_rate: personalWorkspace ? 0 : els.studentEditTutorRate.value,
+        assigned_tutor_id: personalWorkspace ? currentUser.user_id : els.studentEditTutor.value,
         active: els.studentEditActive.checked,
       }),
     });
@@ -730,7 +740,7 @@ function openStudentRemoval(studentId) {
   if (!student) return;
   els.studentRemovalId.value = studentId;
   els.studentRemovalContext.textContent = `Choose what should happen to ${student.student_name}.`;
-  const defaultMode = student.assigned_tutor_id ? "unassign" : "archive";
+  const defaultMode = personalWorkspace ? "archive" : (student.assigned_tutor_id ? "unassign" : "archive");
   const option = document.querySelector(`input[name="studentRemovalMode"][value="${defaultMode}"]`);
   if (option) option.checked = true;
   els.studentRemovalDialog.showModal();
@@ -936,7 +946,9 @@ function openCompleteDialog(bookingId) {
   const booking = bookings.find((item) => Number(item.booking_id) === Number(bookingId));
   if (!booking) return;
   els.completeBookingId.value = booking.booking_id;
-  els.completeContext.textContent = `${booking.student_name} with ${booking.tutor_name} / ${formatDateTime(booking.start_at)}`;
+  els.completeContext.textContent = personalWorkspace
+    ? `${booking.student_name} / ${formatDateTime(booking.start_at)}`
+    : `${booking.student_name} with ${booking.tutor_name} / ${formatDateTime(booking.start_at)}`;
   els.attendanceStatus.value = booking.attendance_status || "Completed";
   els.parentSummary.value = booking.parent_summary || "";
   els.emailParent.checked = booking.status !== "Completed";
@@ -997,7 +1009,7 @@ async function loadHome() {
     <article class="stat"><span class="eyebrow">Booked</span><strong>${monthBookings.length}</strong><small>This month</small></article>
     <article class="stat"><span class="eyebrow">Completed</span><strong>${done.length}</strong><small>Recorded lessons</small></article>
     <article class="stat"><span class="eyebrow">Need Notes</span><strong>${incomplete.length}</strong><small>Past lessons incomplete</small></article>
-    <article class="stat"><span class="eyebrow">Tutors</span><strong>${tutors.length}</strong><small>Tutor accounts</small></article>
+    ${personalWorkspace ? `<article class="stat"><span class="eyebrow">Income</span><strong>${money(done.reduce((sum, lesson) => sum + Number(lesson.student_rate || 0) * Number(lesson.duration_minutes || 0) / 60, 0))}</strong><small>Completed lessons this month</small></article>` : `<article class="stat"><span class="eyebrow">Tutors</span><strong>${tutors.length}</strong><small>Tutor accounts</small></article>`}
   `;
   els.upcomingList.innerHTML = upcoming.length ? upcoming.map(bookingItem).join("") : `<div class="notice">No upcoming lessons this month.</div>`;
   els.completionList.innerHTML = incomplete.length ? incomplete.map(bookingItem).join("") : `<div class="notice">No overdue lesson notes.</div>`;
@@ -1023,7 +1035,7 @@ function completedLessonsQuery() {
     qs.set("start", els.completedStart.value);
     qs.set("end", els.completedEnd.value);
   }
-  if (currentUser.role === "Master" && els.completedTutor.value) qs.set("tutor_id", els.completedTutor.value);
+  if (!personalWorkspace && currentUser.role === "Master" && els.completedTutor.value) qs.set("tutor_id", els.completedTutor.value);
   if (currentUser.role === "Master" && els.completedStudent.value) qs.set("student_id", els.completedStudent.value);
   return qs;
 }
@@ -1061,7 +1073,7 @@ function completedLessonItem(lesson) {
         <span class="pill">${escapeHtml(lesson.attendance_status || "Completed")}</span>
       </div>
       <p>${formatDateTime(lesson.start_at || lesson.completed_at)} / ${lesson.duration_minutes || 0} mins</p>
-      <p><strong>Tutor:</strong> ${escapeHtml(lesson.tutor_name)}</p>
+      ${personalWorkspace ? "" : `<p><strong>Tutor:</strong> ${escapeHtml(lesson.tutor_name)}</p>`}
       <p><strong>Lesson notes:</strong> ${escapeHtml(lesson.parent_summary || "No notes recorded.")}</p>
       <p>${emailed ? "Notes emailed to parent" : "Notes not emailed to parent"}</p>
     </article>
@@ -1073,18 +1085,18 @@ function bookingItem(booking) {
     <article class="item">
       <div class="item-head"><h4>${escapeHtml(booking.student_name)}</h4><span class="pill">${escapeHtml(booking.status)}</span></div>
       <p>${formatDateTime(booking.start_at)} / ${booking.duration_minutes} mins</p>
-      <p>${escapeHtml(booking.tutor_name)}</p>
+      ${personalWorkspace ? "" : `<p>${escapeHtml(booking.tutor_name)}</p>`}
       <button type="button" data-open-calendar>Open Calendar</button>
     </article>
   `;
 }
 
 async function loadTimesheet() {
-  const tutorQuery = currentUser.role === "Master" && els.timesheetTutor.value ? `&tutor_id=${encodeURIComponent(els.timesheetTutor.value)}` : "";
+  const tutorQuery = !personalWorkspace && currentUser.role === "Master" && els.timesheetTutor.value ? `&tutor_id=${encodeURIComponent(els.timesheetTutor.value)}` : "";
   const data = await api(`/api/timesheet?month=${encodeURIComponent(els.timesheetMonth.value)}${tutorQuery}`);
   const rows = data.lessons;
   const total = rows.reduce((sum, lesson) => sum + (Number(lesson.duration_minutes || 0) / 60) * Number(lesson.tutor_rate || 0), 0);
-  els.timesheetSummary.textContent = `${rows.length} completed lessons / ${money(total)} total`;
+  els.timesheetSummary.textContent = `${rows.length} completed lessons / ${money(total)} ${personalWorkspace ? "income" : "total"}`;
   els.timesheetList.innerHTML = rows.length ? rows.map((lesson) => lessonItem(lesson, "tutor_rate")).join("") : `<div class="notice">No completed lessons for this period.</div>`;
 }
 
@@ -1093,14 +1105,14 @@ function lessonItem(lesson, rateKey) {
   return `
     <article class="item">
       <div class="item-head"><h4>${escapeHtml(lesson.student_name)}</h4><span class="pill">${money(fee)}</span></div>
-      <p>${formatDateTime(lesson.start_at || lesson.completed_at)} / ${lesson.duration_minutes || 0} mins / ${escapeHtml(lesson.tutor_name)} / ${escapeHtml(lesson.timesheet_status || "Draft")}</p>
+      <p>${formatDateTime(lesson.start_at || lesson.completed_at)} / ${lesson.duration_minutes || 0} mins${personalWorkspace ? "" : ` / ${escapeHtml(lesson.tutor_name)} / ${escapeHtml(lesson.timesheet_status || "Draft")}`}</p>
       ${lesson.parent_summary ? `<p>${escapeHtml(lesson.parent_summary)}</p>` : ""}
     </article>
   `;
 }
 
 function downloadTimesheetFile(format) {
-  const tutorQuery = currentUser.role === "Master" && els.timesheetTutor.value ? `&tutor_id=${encodeURIComponent(els.timesheetTutor.value)}` : "";
+  const tutorQuery = !personalWorkspace && currentUser.role === "Master" && els.timesheetTutor.value ? `&tutor_id=${encodeURIComponent(els.timesheetTutor.value)}` : "";
   const link = document.createElement("a");
   link.href = `/api/timesheet?month=${encodeURIComponent(els.timesheetMonth.value)}${tutorQuery}&format=${encodeURIComponent(format)}`;
   link.download = "";
@@ -1142,7 +1154,7 @@ async function setTimesheetStatus(status) {
 
 async function loadReports() {
   const qs = new URLSearchParams({ month: els.reportMonth.value });
-  if (els.reportTutor.value) qs.set("tutor_id", els.reportTutor.value);
+  if (!personalWorkspace && els.reportTutor.value) qs.set("tutor_id", els.reportTutor.value);
   if (els.reportStudent.value) qs.set("student_id", els.reportStudent.value);
   const data = await api(`/api/reports/lessons?${qs.toString()}`);
   lessons = data.lessons;
@@ -1155,7 +1167,12 @@ async function loadReports() {
     byTutor[lesson.tutor_name] = (byTutor[lesson.tutor_name] || 0) + 1;
     byStudent[lesson.student_name] = (byStudent[lesson.student_name] || 0) + 1;
   });
-  const summary = `
+  const summary = personalWorkspace ? `
+    <div class="notice">
+      ${lessons.length} lessons / ${money(totalFees)} income.
+      Students: ${Object.entries(byStudent).map(([name, count]) => `${escapeHtml(name)} (${count})`).join(", ") || "none"}.
+    </div>
+  ` : `
     <div class="notice">
       ${lessons.length} lessons / ${money(totalFees)} charged / ${money(totalTutorPay)} tutor pay / ${money(totalFees - totalTutorPay)} gross margin.
       Tutors: ${Object.entries(byTutor).map(([name, count]) => `${escapeHtml(name)} (${count})`).join(", ") || "none"}.
@@ -1167,7 +1184,7 @@ async function loadReports() {
 
 function downloadReports() {
   const qs = new URLSearchParams({ month: els.reportMonth.value, format: "csv" });
-  if (els.reportTutor.value) qs.set("tutor_id", els.reportTutor.value);
+  if (!personalWorkspace && els.reportTutor.value) qs.set("tutor_id", els.reportTutor.value);
   if (els.reportStudent.value) qs.set("student_id", els.reportStudent.value);
   window.open(`/api/reports/lessons?${qs.toString()}`, "_blank");
 }
@@ -1187,7 +1204,11 @@ async function loadFinance() {
   const summary = data.summary;
   const vat = data.vat;
   els.financePeriodLabel.textContent = data.period_label;
-  els.financeStats.innerHTML = `
+  els.financeStats.innerHTML = personalWorkspace ? `
+    <article class="stat"><span class="eyebrow">Income</span><strong>${money(summary.gross_income)}</strong><small>${summary.lesson_count} completed lessons</small></article>
+    <article class="stat"><span class="eyebrow">Expenses</span><strong>${money(summary.expenses)}</strong><small>Saved in TutorFlow</small></article>
+    <article class="stat"><span class="eyebrow">Net Income</span><strong>${money(summary.net_income)}</strong><small>Income less expenses</small></article>
+  ` : `
     <article class="stat"><span class="eyebrow">Gross Income</span><strong>${money(summary.gross_income)}</strong><small>${summary.lesson_count} completed lessons</small></article>
     <article class="stat"><span class="eyebrow">Tutor Costs</span><strong>${money(summary.tutor_costs)}</strong><small>Payable to tutors</small></article>
     <article class="stat"><span class="eyebrow">Other Expenses</span><strong>${money(summary.expenses)}</strong><small>Saved in TutorFlow</small></article>

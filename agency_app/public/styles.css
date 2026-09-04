@@ -708,6 +708,9 @@ body.tutor .master-booking-field {
   display: none !important;
 }
 
+body.personal-workspace .personal-hidden,
+body.personal-workspace .master-booking-field { display: none !important; }
+
 @media (max-width: 980px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; overflow: visible; }

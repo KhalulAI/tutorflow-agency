@@ -582,8 +582,9 @@ def finance_csv(summary, expenses, period_label: str) -> str:
     writer.writerow([])
     writer.writerow(["Metric", "Amount (GBP)"])
     writer.writerow(["Gross income", summary["gross_income"]])
-    writer.writerow(["Tutor costs", summary["tutor_costs"]])
-    writer.writerow(["Gross margin", summary["gross_margin"]])
+    if not PERSONAL_WORKSPACE:
+        writer.writerow(["Tutor costs", summary["tutor_costs"]])
+        writer.writerow(["Gross margin", summary["gross_margin"]])
     writer.writerow(["Other expenses", summary["expenses"]])
     writer.writerow(["Net income", summary["net_income"]])
     writer.writerow([])
@@ -599,7 +600,7 @@ def finance_csv(summary, expenses, period_label: str) -> str:
 
 
 def build_timesheet_pdf(lessons, tutor, month: str) -> bytes:
-    """Build the official SWL Education Ltd tutor timesheet."""
+    """Build a monthly teaching record or agency tutor timesheet."""
     from xml.sax.saxutils import escape
 
     from reportlab.lib import colors
@@ -694,9 +695,9 @@ def build_timesheet_pdf(lessons, tutor, month: str) -> bytes:
         rightMargin=15 * mm,
         topMargin=13 * mm,
         bottomMargin=15 * mm,
-        title=f"{BUSINESS_NAME} - {period_label} Tutor Timesheet",
+        title=f"{BUSINESS_NAME} - {period_label} {'Teaching Record' if PERSONAL_WORKSPACE else 'Tutor Timesheet'}",
         author=BUSINESS_NAME,
-        subject="Monthly tutor timesheet",
+        subject="Monthly teaching record" if PERSONAL_WORKSPACE else "Monthly tutor timesheet",
     )
 
     def add_footer(canvas, doc):
@@ -706,7 +707,7 @@ def build_timesheet_pdf(lessons, tutor, month: str) -> bytes:
         canvas.line(doc.leftMargin, 10 * mm, width - doc.rightMargin, 10 * mm)
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(muted)
-        canvas.drawString(doc.leftMargin, 6.5 * mm, f"{BUSINESS_NAME} | Tutor timesheet")
+        canvas.drawString(doc.leftMargin, 6.5 * mm, f"{BUSINESS_NAME} | {'Teaching record' if PERSONAL_WORKSPACE else 'Tutor timesheet'}")
         canvas.drawRightString(width - doc.rightMargin, 6.5 * mm, f"Page {doc.page}")
         canvas.restoreState()
 
@@ -714,7 +715,7 @@ def build_timesheet_pdf(lessons, tutor, month: str) -> bytes:
         Table(
             [[
                 Paragraph(escape(BUSINESS_NAME.upper()), company_style),
-                Paragraph("OFFICIAL TUTOR RECORD", ParagraphStyle("Record", parent=company_style, alignment=TA_RIGHT, textColor=gold)),
+                Paragraph("PERSONAL TEACHING RECORD" if PERSONAL_WORKSPACE else "OFFICIAL TUTOR RECORD", ParagraphStyle("Record", parent=company_style, alignment=TA_RIGHT, textColor=gold)),
             ]],
             colWidths=[125 * mm, 132 * mm],
             style=TableStyle([
@@ -727,7 +728,7 @@ def build_timesheet_pdf(lessons, tutor, month: str) -> bytes:
             ]),
         ),
         Spacer(1, 6 * mm),
-        Paragraph("Monthly Tutor Timesheet", title_style),
+        Paragraph("Monthly Teaching Record" if PERSONAL_WORKSPACE else "Monthly Tutor Timesheet", title_style),
         Spacer(1, 2 * mm),
     ]
 
@@ -736,7 +737,7 @@ def build_timesheet_pdf(lessons, tutor, month: str) -> bytes:
     prepared = datetime.now().strftime("%d %B %Y")
     metadata = Table(
         [[
-            Paragraph("TUTOR", meta_label),
+            Paragraph("NAME" if PERSONAL_WORKSPACE else "TUTOR", meta_label),
             Paragraph("EMAIL", meta_label),
             Paragraph("PERIOD", meta_label),
             Paragraph("PREPARED", meta_label),
@@ -769,7 +770,7 @@ def build_timesheet_pdf(lessons, tutor, month: str) -> bytes:
         Paragraph("HOURLY FEE", header_style),
         Paragraph("AMOUNT", header_style),
         Paragraph("ATTENDANCE", header_style),
-        Paragraph("TIMESHEET STATUS", header_style),
+        Paragraph("RECORD STATUS" if PERSONAL_WORKSPACE else "TIMESHEET STATUS", header_style),
     ]]
     total_minutes = 0
     total_amount = 0.0
@@ -833,7 +834,7 @@ def build_timesheet_pdf(lessons, tutor, month: str) -> bytes:
         [[
             Paragraph(f"<b>{len(lessons)}</b><br/><font size='7'>LESSONS</font>", ParagraphStyle("Summary", parent=meta_value, alignment=TA_CENTER)),
             Paragraph(f"<b>{total_minutes / 60:.2f}</b><br/><font size='7'>TOTAL HOURS</font>", ParagraphStyle("Summary2", parent=meta_value, alignment=TA_CENTER)),
-            Paragraph(f"<b>GBP {total_amount:,.2f}</b><br/><font size='7'>TOTAL PAYABLE</font>", ParagraphStyle("Summary3", parent=meta_value, alignment=TA_CENTER)),
+            Paragraph(f"<b>GBP {total_amount:,.2f}</b><br/><font size='7'>{'TOTAL INCOME' if PERSONAL_WORKSPACE else 'TOTAL PAYABLE'}</font>", ParagraphStyle("Summary3", parent=meta_value, alignment=TA_CENTER)),
             Paragraph("I confirm that the lessons listed above are a true and accurate record.", small_style),
         ]],
         colWidths=[38 * mm, 45 * mm, 52 * mm, 122 * mm],
@@ -852,8 +853,8 @@ def build_timesheet_pdf(lessons, tutor, month: str) -> bytes:
 
     signatures = Table(
         [[
-            Paragraph("Tutor signature: ____________________________________", small_style),
-            Paragraph("Approved by: ____________________________________", small_style),
+            Paragraph(("Prepared by: " if PERSONAL_WORKSPACE else "Tutor signature: ") + "____________________________________", small_style),
+            Paragraph("" if PERSONAL_WORKSPACE else "Approved by: ____________________________________", small_style),
             Paragraph("Date: ____________________", small_style),
         ]],
         colWidths=[96 * mm, 96 * mm, 65 * mm],
@@ -1020,8 +1021,10 @@ class Handler(SimpleHTTPRequestHandler):
                     SELECT u.user_id, u.name, u.email, u.role, u.hourly_rate, u.active,
                            (SELECT COUNT(*) FROM tutor_documents td WHERE td.tutor_id = u.user_id) AS document_count
                     FROM users u
+                    WHERE (? = 0 OR u.user_id = ?)
                     ORDER BY u.role, u.name
                     """
+                    , (int(PERSONAL_WORKSPACE), user["user_id"])
                 ))
             return self.send_json({"users": tutors})
 
@@ -1148,10 +1151,10 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"error": str(error)}, 400)
             clauses = ["lr.completed_at >= ?", "lr.completed_at < ?"]
             params = [start, end]
-            if user["role"] != "Master":
+            if user["role"] != "Master" or PERSONAL_WORKSPACE:
                 clauses.append("lr.tutor_id = ?")
                 params.append(user["user_id"])
-            elif query.get("tutor_id", [""])[0]:
+            elif not PERSONAL_WORKSPACE and query.get("tutor_id", [""])[0]:
                 clauses.append("lr.tutor_id = ?")
                 params.append(query["tutor_id"][0])
             if query.get("student_id", [""])[0]:
@@ -1178,6 +1181,8 @@ class Handler(SimpleHTTPRequestHandler):
                     params,
                 ))
             if query.get("format", [""])[0] == "csv":
+                if PERSONAL_WORKSPACE:
+                    return self.export_personal_lessons_csv(lessons, query.get("month", [start[:7]])[0])
                 if user["role"] == "Master":
                     month = query.get("month", [start[:7]])[0]
                     return self.export_invoicing_csv(lessons, month)
@@ -1187,17 +1192,22 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/timesheet":
             start, end = query_period(query)
             month = query.get("month", [datetime.now().strftime("%Y-%m")])[0]
-            tutor_id = user["user_id"] if user["role"] != "Master" else int(query.get("tutor_id", [user["user_id"]])[0] or user["user_id"])
+            tutor_id = user["user_id"] if user["role"] != "Master" or PERSONAL_WORKSPACE else int(query.get("tutor_id", [user["user_id"]])[0] or user["user_id"])
             with db() as conn:
                 tutor_record = conn.execute(
                     "SELECT user_id, name, email, hourly_rate FROM users WHERE user_id = ?",
                     (tutor_id,),
                 ).fetchone()
                 tutor = dict(tutor_record) if tutor_record else None
+                rate_expression = (
+                    "COALESCE(lr.client_hourly_rate, s.hourly_rate, 0)"
+                    if PERSONAL_WORKSPACE else
+                    "COALESCE(lr.tutor_hourly_rate, s.tutor_hourly_rate, u.hourly_rate)"
+                )
                 lessons = rows(conn.execute(
-                    """
+                    f"""
                     SELECT lr.*, b.start_at, COALESCE(lr.duration_minutes, b.duration_minutes) AS duration_minutes,
-                           s.student_name, COALESCE(lr.tutor_hourly_rate, s.tutor_hourly_rate, u.hourly_rate) AS tutor_rate,
+                           s.student_name, {rate_expression} AS tutor_rate,
                            u.name AS tutor_name
                     FROM lesson_records lr
                     LEFT JOIN bookings b ON b.booking_id = lr.booking_id
@@ -1543,6 +1553,8 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/users":
             if not self.require_master():
                 return
+            if PERSONAL_WORKSPACE:
+                return self.send_json({"error": "Tutor accounts are disabled in this personal workspace."}, 404)
             temp_password = payload.get("password") or f"Tutor-{secrets.token_urlsafe(5)}"
             tutor_email = payload["email"].strip().lower()
             with db() as conn:
@@ -1578,6 +1590,8 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/users/") and path.endswith("/reset-password"):
             if not self.require_master():
                 return
+            if PERSONAL_WORKSPACE:
+                return self.send_json({"error": "Tutor accounts are disabled in this personal workspace."}, 404)
             tutor_id = int(path.split("/")[3])
             temp_password = f"Tutor-{secrets.token_urlsafe(5)}"
             with db() as conn:
@@ -1614,6 +1628,8 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/users/") and path.endswith("/update"):
             if not self.require_master():
                 return
+            if PERSONAL_WORKSPACE:
+                return self.send_json({"error": "Tutor accounts are disabled in this personal workspace."}, 404)
             tutor_id = int(path.split("/")[3])
             with db() as conn:
                 conn.execute(
@@ -1634,6 +1650,8 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/users/") and path.endswith("/status"):
             if not self.require_master():
                 return
+            if PERSONAL_WORKSPACE:
+                return self.send_json({"error": "Tutor accounts are disabled in this personal workspace."}, 404)
             tutor_id = int(path.split("/")[3])
             active = 1 if payload.get("active") else 0
             with db() as conn:
@@ -1651,6 +1669,8 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/users/") and path.endswith("/delete"):
             if not self.require_master():
                 return
+            if PERSONAL_WORKSPACE:
+                return self.send_json({"error": "Tutor accounts are disabled in this personal workspace."}, 404)
             tutor_id = int(path.split("/")[3])
             with db() as conn:
                 tutor = conn.execute(
@@ -1691,7 +1711,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"error": str(error)}, 400)
             if client_rate < 0 or (tutor_rate is not None and tutor_rate < 0):
                 return self.send_json({"error": "Hourly rates cannot be negative."}, 400)
-            assigned_tutor_id = int(payload["assigned_tutor_id"]) if payload.get("assigned_tutor_id") else None
+            assigned_tutor_id = user["user_id"] if PERSONAL_WORKSPACE else (int(payload["assigned_tutor_id"]) if payload.get("assigned_tutor_id") else None)
+            if PERSONAL_WORKSPACE:
+                tutor_rate = 0
             with db() as conn:
                 if assigned_tutor_id and not conn.execute(
                     "SELECT user_id FROM users WHERE user_id = ? AND (role = 'Tutor' OR (role = 'Master' AND ? = 1)) AND active = 1",
@@ -1724,7 +1746,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             student_id = int(path.split("/")[3])
             with db() as conn:
-                conn.execute("UPDATE students SET assigned_tutor_id = ? WHERE student_id = ?", (payload.get("assigned_tutor_id") or None, student_id))
+                assigned_to = user["user_id"] if PERSONAL_WORKSPACE else (payload.get("assigned_tutor_id") or None)
+                conn.execute("UPDATE students SET assigned_tutor_id = ? WHERE student_id = ?", (assigned_to, student_id))
             return self.send_json({"ok": True})
 
         if path.startswith("/api/students/") and path.endswith("/update"):
@@ -1739,7 +1762,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"error": str(error)}, 400)
             if client_rate < 0 or (tutor_rate is not None and tutor_rate < 0):
                 return self.send_json({"error": "Hourly rates cannot be negative."}, 400)
-            assigned_tutor_id = int(payload["assigned_tutor_id"]) if payload.get("assigned_tutor_id") else None
+            assigned_tutor_id = user["user_id"] if PERSONAL_WORKSPACE else (int(payload["assigned_tutor_id"]) if payload.get("assigned_tutor_id") else None)
+            if PERSONAL_WORKSPACE:
+                tutor_rate = 0
             with db() as conn:
                 if assigned_tutor_id and not conn.execute(
                     "SELECT user_id FROM users WHERE user_id = ? AND (role = 'Tutor' OR (role = 'Master' AND ? = 1)) AND active = 1",
@@ -1776,6 +1801,11 @@ class Handler(SimpleHTTPRequestHandler):
             mode = payload.get("mode", "")
             if mode not in {"unassign", "archive", "delete"}:
                 return self.send_json({"error": "Choose unassign, archive, or delete."}, 400)
+            if PERSONAL_WORKSPACE and mode == "unassign":
+                return self.send_json(
+                    {"error": "Students in your personal workspace remain assigned to you. Archive the student instead."},
+                    400,
+                )
             with db() as conn:
                 student = conn.execute(
                     "SELECT student_id, student_name FROM students WHERE student_id = ?",
@@ -1878,7 +1908,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"ok": True, "month": month, "locked": locked})
 
         if path == "/api/bookings":
-            tutor_id = int(payload.get("tutor_id") or user["user_id"])
+            tutor_id = user["user_id"] if PERSONAL_WORKSPACE else int(payload.get("tutor_id") or user["user_id"])
             if user["role"] != "Master" and tutor_id != user["user_id"]:
                 return self.send_json({"error": "Tutors can only book their own lessons."}, 403)
             repeat = int(payload.get("repeat_weeks") or 1)
@@ -2017,7 +2047,7 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.send_json({"error": locked_month_message(booking["start_at"])}, 423)
                 if month_is_locked(conn, new_start):
                     return self.send_json({"error": locked_month_message(new_start)}, 423)
-                tutor_id = int(payload.get("tutor_id") or booking["tutor_id"])
+                tutor_id = user["user_id"] if PERSONAL_WORKSPACE else int(payload.get("tutor_id") or booking["tutor_id"])
                 if user["role"] != "Master" and tutor_id != user["user_id"]:
                     return self.send_json({"error": "Tutors can only keep lessons assigned to themselves."}, 403)
                 tutor = conn.execute(
@@ -2083,6 +2113,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"ok": True})
 
         if path == "/api/timesheet/submit":
+            if PERSONAL_WORKSPACE:
+                return self.send_json({"error": "Timesheet submission is not used in the personal workspace."}, 404)
             month = normalize_month(payload.get("month", datetime.now().strftime("%Y-%m")))
             start, end = query_period({"month": [month]})
             with db() as conn:
@@ -2095,6 +2127,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"ok": True})
 
         if path == "/api/timesheet/status":
+            if PERSONAL_WORKSPACE:
+                return self.send_json({"error": "Timesheet approval is not used in the personal workspace."}, 404)
             if not self.require_master():
                 return
             month = normalize_month(payload.get("month", datetime.now().strftime("%Y-%m")))
@@ -2126,6 +2160,32 @@ class Handler(SimpleHTTPRequestHandler):
             f"{BUSINESS_FILE_PREFIX}-month-end-{safe_month or 'report'}.csv",
             self.csv_for_invoicing(lessons),
         )
+
+    def export_personal_lessons_csv(self, lessons, month):
+        from io import StringIO
+
+        output = StringIO()
+        writer = csv.DictWriter(output, fieldnames=["Date", "Student", "Duration (minutes)",
+                                                    "Hourly Rate", "Income", "Status", "Lesson Notes"])
+        writer.writeheader()
+        total = 0.0
+        for lesson in lessons:
+            minutes = int(lesson.get("duration_minutes") or 0)
+            rate = float(lesson.get("student_rate") or 0)
+            income = round(minutes * rate / 60, 2)
+            total += income
+            writer.writerow({
+                "Date": lesson.get("start_at") or lesson.get("completed_at"),
+                "Student": lesson.get("student_name", ""),
+                "Duration (minutes)": minutes,
+                "Hourly Rate": rate,
+                "Income": income,
+                "Status": lesson.get("attendance_status", ""),
+                "Lesson Notes": lesson.get("parent_summary", ""),
+            })
+        writer.writerow({"Date": "MONTH TOTAL", "Income": round(total, 2)})
+        safe_month = "".join(character for character in str(month) if character.isdigit() or character == "-")
+        return self.send_csv(f"{BUSINESS_FILE_PREFIX}-teaching-income-{safe_month or 'report'}.csv", output.getvalue())
 
     def export_timesheet_csv(self, lessons):
         return self.send_csv(

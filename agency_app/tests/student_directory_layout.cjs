@@ -26,7 +26,7 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
           ...(role === 'Master' ? { hourly_rate: 130, tutor_hourly_rate: 80 } : {}),
         };
         const responses = {
-          '/api/business': { business_name: 'Scott Linger', app_name: 'Scott Linger - TutorFlow', workspace_name: 'Scott Linger', personal_workspace: true },
+          '/api/business': { business_name: 'Scott Linger', app_name: 'Scott Linger - TutorFlow', workspace_name: 'Scott Linger', personal_workspace: role === 'Master' },
           '/api/setup-status': { has_master: true },
           '/api/session': { user },
           '/api/students': { students: [student, { ...student, student_id: 2, student_name: 'Second Student', active: 0 }] },
@@ -54,6 +54,10 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
         assert.equal(await page.locator('#assignedTutor option[value="2"]').count(), 1);
         assert.equal(await page.locator('#bookingTutor option[value="2"]').count(), 1);
         assert.equal(await page.locator('#timesheetTutor option[value="2"]').count(), 1);
+        assert.equal(await page.locator('[data-tab="tutors"]').isVisible(), false);
+        assert.equal(await page.locator('#completedTutor').isVisible(), false);
+        assert.equal(await page.locator('#reportTutor').isVisible(), false);
+        assert.equal(await page.locator('#timesheetTutor').isVisible(), false);
         await page.setViewportSize({ width: 1280, height: 640 });
         const sidebar = await page.evaluate(() => {
           const aside = document.querySelector('.sidebar');
@@ -114,8 +118,9 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
             await page.screenshot({ path: path.join(process.env.LAYOUT_SCREENSHOTS, `tutor-directory-${width}.png`), fullPage: true });
           }
         } else {
-          assert.ok(metrics.headers.includes('Client rate'));
-          assert.ok(metrics.headers.includes('Tutor rate'));
+          assert.ok(metrics.headers.includes('Hourly charge'));
+          assert.ok(!metrics.headers.includes('Tutor'));
+          assert.ok(!metrics.headers.includes('Tutor rate'));
         }
         console.log(`${role} ${width}px: layout passed (${metrics.rowDisplay})`);
       }
