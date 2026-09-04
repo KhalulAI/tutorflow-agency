@@ -135,6 +135,7 @@ textarea { resize: vertical; }
   background: var(--green);
   color: #fffaf1;
   padding: 26px 20px;
+  overflow: hidden;
 }
 
 .sidebar .eyebrow { color: var(--gold); }
@@ -143,9 +144,14 @@ textarea { resize: vertical; }
 
 nav {
   display: grid;
+  align-content: start;
   gap: 6px;
   border-top: 1px solid rgba(255,255,255,.14);
   padding-top: 18px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .tab {
@@ -704,7 +710,8 @@ body.tutor .master-booking-field {
 
 @media (max-width: 980px) {
   .app-shell { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; }
+  .sidebar { position: static; height: auto; overflow: visible; }
+  .sidebar nav { overflow: visible; }
   .grid-two, .calendar-layout { grid-template-columns: 1fr; }
   #students .grid-two { grid-template-columns: 1fr; }
   .booking-panel { grid-template-columns: 1fr; }

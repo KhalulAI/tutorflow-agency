@@ -54,6 +54,26 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
         assert.equal(await page.locator('#assignedTutor option[value="2"]').count(), 1);
         assert.equal(await page.locator('#bookingTutor option[value="2"]').count(), 1);
         assert.equal(await page.locator('#timesheetTutor option[value="2"]').count(), 1);
+        await page.setViewportSize({ width: 1280, height: 640 });
+        const sidebar = await page.evaluate(() => {
+          const aside = document.querySelector('.sidebar');
+          const nav = aside.querySelector('nav');
+          const settings = nav.querySelector('[data-tab="settings"]');
+          settings.scrollIntoView({ block: 'nearest' });
+          const asideRect = aside.getBoundingClientRect();
+          const settingsRect = settings.getBoundingClientRect();
+          return {
+            asideBottom: asideRect.bottom,
+            viewportHeight: innerHeight,
+            settingsTop: settingsRect.top,
+            settingsBottom: settingsRect.bottom,
+            navScrollable: nav.scrollHeight > nav.clientHeight,
+          };
+        });
+        assert.ok(sidebar.navScrollable, 'short desktop sidebar should scroll');
+        assert.ok(sidebar.asideBottom <= sidebar.viewportHeight + 1, 'sidebar background must stay within viewport');
+        assert.ok(sidebar.settingsTop >= 0 && sidebar.settingsBottom <= sidebar.viewportHeight + 1,
+          `Settings should be reachable within sidebar: ${JSON.stringify(sidebar)}`);
       }
       await page.getByRole('button', { name: 'Students', exact: true }).click();
       for (const width of (role === 'Tutor' ? [320, 375, 640, 768, 980, 1024, 1280, 1920] : [1024, 1280, 1920])) {
