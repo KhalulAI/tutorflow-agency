@@ -84,6 +84,7 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
         await page.setViewportSize({ width, height: 900 });
         const metrics = await page.evaluate(() => {
           const grid = document.querySelector('#students .grid-two');
+          const form = document.querySelector('#studentForm');
           const panel = document.querySelector('.student-directory-panel');
           const wrap = document.querySelector('#studentList .table-wrap');
           const row = document.querySelector('.student-table tbody tr');
@@ -91,7 +92,10 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
             pageWidth: document.documentElement.clientWidth,
             pageScrollWidth: document.documentElement.scrollWidth,
             gridWidth: grid.getBoundingClientRect().width,
+            formWidth: form.getBoundingClientRect().width,
+            formBottom: form.getBoundingClientRect().bottom,
             panelWidth: panel.getBoundingClientRect().width,
+            panelTop: panel.getBoundingClientRect().top,
             panelRight: panel.getBoundingClientRect().right,
             wrapWidth: wrap.clientWidth, wrapScrollWidth: wrap.scrollWidth,
             rowDisplay: getComputedStyle(row).display,
@@ -118,6 +122,9 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
             await page.screenshot({ path: path.join(process.env.LAYOUT_SCREENSHOTS, `tutor-directory-${width}.png`), fullPage: true });
           }
         } else {
+          assert.ok(Math.abs(metrics.gridWidth - metrics.formWidth) <= 1, `${width}: personal add-student form is not full width`);
+          assert.ok(Math.abs(metrics.gridWidth - metrics.panelWidth) <= 1, `${width}: personal directory is not full width`);
+          assert.ok(metrics.panelTop >= metrics.formBottom, `${width}: personal directory is not below the add-student form`);
           assert.ok(metrics.headers.includes('Hourly charge'));
           assert.ok(!metrics.headers.includes('Tutor'));
           assert.ok(!metrics.headers.includes('Tutor rate'));

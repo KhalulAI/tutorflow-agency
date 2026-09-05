@@ -711,6 +711,11 @@ body.tutor .master-booking-field {
 body.personal-workspace .personal-hidden,
 body.personal-workspace .master-booking-field { display: none !important; }
 
+/* The personal workspace reads more naturally as a form followed by a full-width directory. */
+body.personal-workspace #students .grid-two {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 @media (max-width: 980px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; overflow: visible; }
