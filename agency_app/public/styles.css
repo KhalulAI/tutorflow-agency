@@ -445,10 +445,12 @@ body.tutor .student-table .pill { white-space: normal; }
 
 .booking-panel {
   display: grid;
-  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
   gap: 12px;
   align-items: end;
 }
+
+.booking-panel > * { min-width: 0; }
 
 .booking-panel h3,
 .booking-panel label:last-of-type,
@@ -481,14 +483,12 @@ body.tutor .student-table .pill { white-space: normal; }
 
 .day {
   min-width: 0;
-  min-height: 164px;
-  max-height: 210px;
+  min-height: 220px;
   border: 1px solid var(--line);
   border-radius: 5px;
   background: #fff;
   padding: 7px;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: visible;
 }
 
 .muted-day {

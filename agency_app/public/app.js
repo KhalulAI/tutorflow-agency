@@ -140,6 +140,7 @@ const els = {
   completeBookingFromDialog: $("#completeBookingFromDialog"),
   cancelBookingButton: $("#cancelBookingButton"),
   deleteBookingButton: $("#deleteBookingButton"),
+  deleteBookingSeriesButton: $("#deleteBookingSeriesButton"),
   studentRemovalDialog: $("#studentRemovalDialog"),
   studentRemovalForm: $("#studentRemovalForm"),
   studentRemovalId: $("#studentRemovalId"),
@@ -865,6 +866,7 @@ function openBookingDialog(bookingId) {
   ];
   editControls.forEach((control) => { control.disabled = bookingLocked; });
   els.deleteBookingButton.disabled = bookingLocked || (currentUser.role !== "Master" && booking.status === "Completed");
+  els.deleteBookingSeriesButton.disabled = bookingLocked || (currentUser.role !== "Master" && booking.status === "Completed");
   els.bookingEditForm.querySelector('button[type="submit"]').disabled = bookingLocked;
   els.bookingEditMessage.textContent = bookingLocked
     ? "This month is locked for invoicing. Details are view-only."
@@ -912,6 +914,29 @@ async function deleteBooking() {
     els.bookingDialog.close();
     await loadCalendar();
     await loadHome();
+  } catch (error) {
+    els.bookingEditMessage.textContent = error.message;
+  }
+}
+
+async function deleteBookingSeries() {
+  const booking = bookings.find((item) => Number(item.booking_id) === Number(els.bookingEditId.value));
+  if (!booking) return;
+  try {
+    const preview = await api(`/api/bookings/${booking.booking_id}/delete`, {
+      method: "POST",
+      body: JSON.stringify({ scope: "following", preview: true }),
+    });
+    const lessonWord = preview.count === 1 ? "lesson" : "lessons";
+    if (!confirm(`Permanently delete ${preview.count} ${lessonWord} in this series from ${formatDateTime(booking.start_at)} onwards?\n\nEarlier lessons will remain. This cannot be undone.`)) return;
+    const result = await api(`/api/bookings/${booking.booking_id}/delete`, {
+      method: "POST",
+      body: JSON.stringify({ scope: "following" }),
+    });
+    els.bookingDialog.close();
+    await loadCalendar();
+    await loadHome();
+    alert(`${result.deleted_bookings} ${result.deleted_bookings === 1 ? "lesson was" : "lessons were"} deleted.`);
   } catch (error) {
     els.bookingEditMessage.textContent = error.message;
   }
@@ -1312,6 +1337,7 @@ els.completeBookingFromDialog.addEventListener("click", () => {
 });
 els.cancelBookingButton.addEventListener("click", cancelBooking);
 els.deleteBookingButton.addEventListener("click", deleteBooking);
+els.deleteBookingSeriesButton.addEventListener("click", deleteBookingSeries);
 els.calendarMonth.addEventListener("change", loadCalendar);
 els.toggleMonthLock.addEventListener("click", toggleMonthLock);
 els.homeMonth.addEventListener("change", loadHome);

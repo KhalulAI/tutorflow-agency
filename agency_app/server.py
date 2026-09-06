@@ -292,6 +292,7 @@ def init_db() -> None:
 
             CREATE TABLE IF NOT EXISTS bookings (
                 booking_id {primary_key},
+                series_id TEXT,
                 student_id INTEGER NOT NULL,
                 tutor_id INTEGER NOT NULL,
                 start_at TEXT NOT NULL,
@@ -364,6 +365,7 @@ def init_db() -> None:
         ensure_column(conn, "lesson_records", "client_hourly_rate", "REAL")
         ensure_column(conn, "lesson_records", "tutor_hourly_rate", "REAL")
         ensure_column(conn, "students", "tutor_hourly_rate", "REAL")
+        ensure_column(conn, "bookings", "series_id", "TEXT")
         conn.execute(
             """
             UPDATE lesson_records
@@ -1916,6 +1918,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"error": "Choose one-off, 4, 8, 12, or 24 weeks."}, 400)
             start = datetime.fromisoformat(payload["start_at"])
             item_starts = [start + timedelta(days=7 * week) for week in range(max(1, repeat))]
+            series_id = secrets.token_urlsafe(12)
             with db() as conn:
                 locked_start = next((item for item in item_starts if month_is_locked(conn, item.isoformat())), None)
                 if locked_start:
@@ -1938,10 +1941,11 @@ class Handler(SimpleHTTPRequestHandler):
                     conn.execute(
                         """
                         INSERT INTO bookings
-                          (student_id, tutor_id, start_at, duration_minutes, notes, created_by, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                          (series_id, student_id, tutor_id, start_at, duration_minutes, notes, created_by, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
+                            series_id,
                             int(payload["student_id"]),
                             tutor_id,
                             item_start.replace(microsecond=0).isoformat(),
@@ -2088,6 +2092,11 @@ class Handler(SimpleHTTPRequestHandler):
 
         if path.startswith("/api/bookings/") and path.endswith("/delete"):
             booking_id = int(path.split("/")[3])
+            scope = payload.get("scope", "single")
+            if scope not in {"single", "following"}:
+                return self.send_json({"error": "Choose a valid deletion option."}, 400)
+            if scope == "following" and user["role"] != "Master":
+                return self.send_json({"error": "Only the master account can delete a series of lessons."}, 403)
             with db() as conn:
                 booking = conn.execute(
                     """
@@ -2102,15 +2111,56 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.send_json({"error": "Booking not found."}, 404)
                 if user["role"] != "Master" and booking["tutor_id"] != user["user_id"]:
                     return self.send_json({"error": "You can only delete your own lessons."}, 403)
-                if month_is_locked(conn, booking["start_at"]):
-                    return self.send_json({"error": locked_month_message(booking["start_at"])}, 423)
-                if user["role"] != "Master" and (booking["status"] == "Completed" or booking["has_lesson_record"]):
+                booking = dict(booking)
+                targets = [booking]
+                if scope == "following":
+                    if booking.get("series_id"):
+                        targets = rows(conn.execute(
+                            """
+                            SELECT b.*, CASE WHEN lr.lesson_record_id IS NULL THEN 0 ELSE 1 END AS has_lesson_record
+                            FROM bookings b
+                            LEFT JOIN lesson_records lr ON lr.booking_id = b.booking_id
+                            WHERE b.series_id = ? AND b.start_at >= ?
+                            ORDER BY b.start_at
+                            """,
+                            (booking["series_id"], booking["start_at"]),
+                        ))
+                    else:
+                        # Series created before series IDs were introduced share a creation timestamp.
+                        candidates = rows(conn.execute(
+                            """
+                            SELECT b.*, CASE WHEN lr.lesson_record_id IS NULL THEN 0 ELSE 1 END AS has_lesson_record
+                            FROM bookings b
+                            LEFT JOIN lesson_records lr ON lr.booking_id = b.booking_id
+                            WHERE b.student_id = ? AND b.tutor_id = ? AND b.created_at = ? AND b.start_at >= ?
+                            ORDER BY b.start_at
+                            """,
+                            (booking["student_id"], booking["tutor_id"], booking["created_at"], booking["start_at"]),
+                        ))
+                        anchor = datetime.fromisoformat(booking["start_at"])
+                        targets = [
+                            item for item in candidates
+                            if datetime.fromisoformat(item["start_at"]).weekday() == anchor.weekday()
+                            and datetime.fromisoformat(item["start_at"]).time() == anchor.time()
+                        ]
+                locked_target = next((item for item in targets if month_is_locked(conn, item["start_at"])), None)
+                if locked_target:
+                    return self.send_json({"error": locked_month_message(locked_target["start_at"])}, 423)
+                if user["role"] != "Master" and any(
+                    item["status"] == "Completed" or item["has_lesson_record"] for item in targets
+                ):
                     return self.send_json(
                         {"error": "A completed lesson cannot be deleted by a tutor because it has a lesson record. Ask the master account to correct it."},
                         409,
                     )
-                conn.execute("DELETE FROM bookings WHERE booking_id = ?", (booking_id,))
-            return self.send_json({"ok": True})
+                if payload.get("preview"):
+                    return self.send_json({"ok": True, "count": len(targets)})
+                placeholders = ", ".join("?" for _item in targets)
+                conn.execute(
+                    f"DELETE FROM bookings WHERE booking_id IN ({placeholders})",
+                    tuple(item["booking_id"] for item in targets),
+                )
+            return self.send_json({"ok": True, "deleted_bookings": len(targets)})
 
         if path == "/api/timesheet/submit":
             if PERSONAL_WORKSPACE:

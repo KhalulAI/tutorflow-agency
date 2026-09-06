@@ -700,6 +700,14 @@ class AgencyApiTests(unittest.TestCase):
             {"email": "calendar@example.com", "password": created["temporary_password"]},
             opener=tutor_opener,
         )
+        with self.assertRaises(HTTPError) as series_delete_error:
+            self.api(
+                f"/api/bookings/{first_booking_id}/delete",
+                "POST",
+                {"scope": "following"},
+                opener=tutor_opener,
+            )
+        self.assertEqual(series_delete_error.exception.code, 403)
         self.api(f"/api/bookings/{first_booking_id}/delete", "POST", {}, opener=tutor_opener)
         _, after_tutor_delete = self.api("/api/bookings?month=2026-09")
         self.assertEqual(after_tutor_delete["bookings"], [])
@@ -783,6 +791,51 @@ class AgencyApiTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as completed_delete_error:
             self.api(f"/api/bookings/{booking_id}/delete", "POST", {}, opener=tutor_opener)
         self.assertEqual(completed_delete_error.exception.code, 409)
+
+    def test_delete_this_and_remaining_series_including_legacy_courses(self):
+        self.login_as_master()
+        _, created = self.api(
+            "/api/users", "POST", {"name": "Series Tutor", "email": "series@example.com", "hourly_rate": 40}
+        )
+        _, users = self.api("/api/users")
+        tutor = next(item for item in users["users"] if item["email"] == "series@example.com")
+        self.api(
+            "/api/students", "POST", {"student_name": "Series Student", "assigned_tutor_id": tutor["user_id"]}
+        )
+        _, student_data = self.api("/api/students")
+        student_id = student_data["students"][0]["student_id"]
+        self.api(
+            "/api/bookings",
+            "POST",
+            {
+                "student_id": student_id,
+                "tutor_id": tutor["user_id"],
+                "start_at": "2026-09-03T16:00:00",
+                "repeat_weeks": 4,
+            },
+        )
+        _, booking_data = self.api("/api/bookings?month=2026-09")
+        self.assertEqual(len(booking_data["bookings"]), 4)
+        self.assertEqual(len({item["series_id"] for item in booking_data["bookings"]}), 1)
+        second_booking_id = booking_data["bookings"][1]["booking_id"]
+
+        # Existing courses created before series IDs were added must remain removable.
+        with server.db() as connection:
+            connection.execute("UPDATE bookings SET series_id = NULL")
+
+        _, preview = self.api(
+            f"/api/bookings/{second_booking_id}/delete",
+            "POST",
+            {"scope": "following", "preview": True},
+        )
+        self.assertEqual(preview["count"], 3)
+        _, deleted = self.api(
+            f"/api/bookings/{second_booking_id}/delete", "POST", {"scope": "following"}
+        )
+        self.assertEqual(deleted["deleted_bookings"], 3)
+        _, remaining = self.api("/api/bookings?month=2026-09")
+        self.assertEqual(len(remaining["bookings"]), 1)
+        self.assertEqual(remaining["bookings"][0]["start_at"], "2026-09-03T16:00:00")
 
 
 class TimesheetPdfTests(unittest.TestCase):

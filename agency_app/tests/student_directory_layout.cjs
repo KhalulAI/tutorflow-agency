@@ -131,6 +131,28 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
         }
         console.log(`${role} ${width}px: layout passed (${metrics.rowDisplay})`);
       }
+      if (role === 'Master') {
+        await page.setViewportSize({ width: 1024, height: 900 });
+        await page.getByRole('button', { name: 'Calendar', exact: true }).click();
+        await page.waitForSelector('.calendar-grid .day');
+        const calendarMetrics = await page.evaluate(() => {
+          const date = document.querySelector('#bookingDate').getBoundingClientRect();
+          const time = document.querySelector('#bookingTime').getBoundingClientRect();
+          const day = document.querySelector('.calendar-grid .day');
+          return {
+            dateRight: date.right,
+            timeLeft: time.left,
+            dayMinHeight: parseFloat(getComputedStyle(day).minHeight),
+            dayOverflowY: getComputedStyle(day).overflowY,
+            pageScrollWidth: document.documentElement.scrollWidth,
+            pageWidth: document.documentElement.clientWidth,
+          };
+        });
+        assert.ok(calendarMetrics.dateRight < calendarMetrics.timeLeft, `date and time controls overlap: ${JSON.stringify(calendarMetrics)}`);
+        assert.ok(calendarMetrics.dayMinHeight >= 220, 'calendar days should have more vertical room');
+        assert.equal(calendarMetrics.dayOverflowY, 'visible', 'calendar days should not have individual scrollbars');
+        assert.ok(calendarMetrics.pageScrollWidth <= calendarMetrics.pageWidth + 1, 'calendar page should not overflow horizontally');
+      }
       assert.deepEqual(errors, []);
       await context.close();
     }
