@@ -36,7 +36,11 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
             { booking_id: 2, student_id: 2, student_name: 'Second Student', tutor_id: 2, tutor_name: 'Test Tutor', start_at: '2026-09-11T16:00:00', duration_minutes: 60, status: 'Completed', month_locked: 0 },
             { booking_id: 3, student_id: 1, student_name: longName, tutor_id: 2, tutor_name: 'Test Tutor', parent_email: parentEmails, start_at: '2020-01-02T16:00:00', duration_minutes: 60, status: 'Booked', month_locked: 0 },
           ], month_locked: false },
-          '/api/reports/lessons': { lessons: [] },
+          '/api/reports/lessons': { lessons: [{
+            lesson_record_id: 1, student_name: longName, tutor_name: 'Test Tutor',
+            start_at: '2026-09-10T16:00:00', duration_minutes: 60,
+            student_rate: 130, tutor_rate: 80, attendance_status: 'Completed',
+          }] },
         };
         if (responses[url.pathname]) {
           return route.fulfill({ json: responses[url.pathname] });
@@ -146,6 +150,22 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
       }
       if (role === 'Master') {
         await page.setViewportSize({ width: 1024, height: 900 });
+        await page.getByRole('button', { name: 'Reports', exact: true }).click();
+        await page.waitForSelector('#reportList .notice');
+        const reportMetrics = await page.evaluate(() => {
+          const load = document.querySelector('#loadReports').getBoundingClientRect();
+          const download = document.querySelector('#downloadReports').getBoundingClientRect();
+          return {
+            loadWidth: load.width,
+            loadHeight: load.height,
+            downloadWidth: download.width,
+            downloadHeight: download.height,
+            summary: document.querySelector('#reportList .notice').textContent,
+          };
+        });
+        assert.ok(Math.abs(reportMetrics.loadWidth - reportMetrics.downloadWidth) <= 1, 'report buttons should have equal widths');
+        assert.ok(Math.abs(reportMetrics.loadHeight - reportMetrics.downloadHeight) <= 1, 'report buttons should have equal heights');
+        assert.doesNotMatch(reportMetrics.summary, /Students:/, 'report summary should not include the student breakdown');
         await page.getByRole('button', { name: 'Calendar', exact: true }).click();
         await page.waitForSelector('.calendar-grid .day');
         const calendarMetrics = await page.evaluate(() => {

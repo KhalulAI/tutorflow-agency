@@ -272,11 +272,20 @@ class AgencyApiTests(unittest.TestCase):
 
         csv_request = Request(self.base_url + f"/api/timesheet?month={month}&order=student&format=csv")
         with self.opener.open(csv_request) as response:
+            self.assertIn(f"timesheet-{month}-agency-owner.csv", response.headers["Content-Disposition"])
             spreadsheet_rows = list(csv.DictReader(StringIO(response.read().decode("utf-8-sig"))))
+        self.assertEqual(
+            list(spreadsheet_rows[0]),
+            ["Date", "Student", "Lesson length", "Time", "Amount (£)"],
+        )
         self.assertEqual(
             [row["Student"] for row in spreadsheet_rows],
             ["Alpha Student", "Alpha Student", "Zulu Student"],
         )
+        self.assertEqual(spreadsheet_rows[0]["Date"], f"01/{month[5:7]}/{month[:4]}")
+        self.assertEqual(spreadsheet_rows[0]["Time"], "16:00")
+        self.assertEqual(spreadsheet_rows[0]["Lesson length"], "60 minutes")
+        self.assertEqual(spreadsheet_rows[0]["Amount (£)"], "40.00")
 
         pdf_request = Request(self.base_url + f"/api/timesheet?month={month}&order=student&format=pdf")
         with self.opener.open(pdf_request) as response:

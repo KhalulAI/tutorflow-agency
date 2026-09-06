@@ -615,6 +615,12 @@ body.tutor .student-table .pill { white-space: normal; }
 
 .toolbar > * { max-width: 240px; }
 
+#reports .toolbar .report-action {
+  flex: 0 1 240px;
+  width: 240px;
+  height: 64px;
+}
+
 .notice {
   border: 1px dashed color-mix(in srgb, var(--teal) 30%, var(--line));
   border-radius: 5px;

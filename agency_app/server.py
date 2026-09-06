@@ -1268,7 +1268,7 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"error": "Tutor not found"}, 404)
             download_format = query.get("format", [""])[0].lower()
             if download_format == "csv":
-                return self.export_timesheet_csv(lessons)
+                return self.export_timesheet_csv(lessons, tutor, month)
             if download_format == "pdf":
                 filename_name = re.sub(r"[^a-z0-9]+", "-", tutor["name"].lower()).strip("-") or "tutor"
                 filename_month = re.sub(r"[^0-9-]+", "", month) or datetime.now().strftime("%Y-%m")
@@ -2299,11 +2299,40 @@ class Handler(SimpleHTTPRequestHandler):
         safe_month = "".join(character for character in str(month) if character.isdigit() or character == "-")
         return self.send_csv(f"{BUSINESS_FILE_PREFIX}-teaching-income-{safe_month or 'report'}.csv", output.getvalue())
 
-    def export_timesheet_csv(self, lessons):
+    def export_timesheet_csv(self, lessons, tutor, month):
+        safe_month = re.sub(r"[^0-9-]+", "", str(month)) or datetime.now().strftime("%Y-%m")
+        safe_tutor = re.sub(r"[^a-z0-9]+", "-", tutor["name"].lower()).strip("-") or "tutor"
         return self.send_csv(
-            "timesheet.csv",
-            self.csv_for_lessons(lessons, include_notes=False, rate_key="tutor_rate"),
+            f"{BUSINESS_FILE_PREFIX}-timesheet-{safe_month}-{safe_tutor}.csv",
+            self.csv_for_timesheet(lessons),
         )
+
+    def csv_for_timesheet(self, lessons):
+        from io import StringIO
+
+        output = StringIO()
+        fields = ["Date", "Student", "Lesson length", "Time", "Amount (£)"]
+        writer = csv.DictWriter(output, fieldnames=fields)
+        writer.writeheader()
+        for lesson in lessons:
+            lesson_at = lesson.get("start_at") or lesson.get("completed_at") or ""
+            try:
+                lesson_datetime = datetime.fromisoformat(str(lesson_at).replace("Z", "+00:00"))
+                lesson_date = lesson_datetime.strftime("%d/%m/%Y")
+                lesson_time = lesson_datetime.strftime("%H:%M")
+            except (TypeError, ValueError):
+                lesson_date = str(lesson_at)
+                lesson_time = ""
+            minutes = int(lesson.get("duration_minutes") or 0)
+            rate = float(lesson.get("tutor_rate") or 0)
+            writer.writerow({
+                "Date": lesson_date,
+                "Student": lesson.get("student_name", ""),
+                "Lesson length": f"{minutes} minutes",
+                "Time": lesson_time,
+                "Amount (£)": f"{minutes * rate / 60:.2f}",
+            })
+        return output.getvalue()
 
     def csv_for_lessons(self, lessons, include_notes: bool, rate_key: str):
         from io import StringIO
