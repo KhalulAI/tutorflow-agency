@@ -91,6 +91,7 @@ const els = {
   closeCompleteDialogX: $("#closeCompleteDialogX"),
   timesheetMonth: $("#timesheetMonth"),
   timesheetTutor: $("#timesheetTutor"),
+  timesheetOrder: $("#timesheetOrder"),
   loadTimesheet: $("#loadTimesheet"),
   downloadTimesheet: $("#downloadTimesheet"),
   downloadTimesheetPdf: $("#downloadTimesheetPdf"),
@@ -1156,7 +1157,8 @@ function bookingItem(booking, quickComplete = false) {
 
 async function loadTimesheet() {
   const tutorQuery = !personalWorkspace && currentUser.role === "Master" && els.timesheetTutor.value ? `&tutor_id=${encodeURIComponent(els.timesheetTutor.value)}` : "";
-  const data = await api(`/api/timesheet?month=${encodeURIComponent(els.timesheetMonth.value)}${tutorQuery}`);
+  const orderQuery = `&order=${encodeURIComponent(els.timesheetOrder.value)}`;
+  const data = await api(`/api/timesheet?month=${encodeURIComponent(els.timesheetMonth.value)}${tutorQuery}${orderQuery}`);
   const rows = data.lessons;
   const total = rows.reduce((sum, lesson) => sum + (Number(lesson.duration_minutes || 0) / 60) * Number(lesson.tutor_rate || 0), 0);
   els.timesheetSummary.textContent = `${rows.length} completed lessons / ${money(total)} ${personalWorkspace ? "income" : "total"}`;
@@ -1176,8 +1178,9 @@ function lessonItem(lesson, rateKey) {
 
 function downloadTimesheetFile(format) {
   const tutorQuery = !personalWorkspace && currentUser.role === "Master" && els.timesheetTutor.value ? `&tutor_id=${encodeURIComponent(els.timesheetTutor.value)}` : "";
+  const orderQuery = `&order=${encodeURIComponent(els.timesheetOrder.value)}`;
   const link = document.createElement("a");
-  link.href = `/api/timesheet?month=${encodeURIComponent(els.timesheetMonth.value)}${tutorQuery}&format=${encodeURIComponent(format)}`;
+  link.href = `/api/timesheet?month=${encodeURIComponent(els.timesheetMonth.value)}${tutorQuery}${orderQuery}&format=${encodeURIComponent(format)}`;
   link.download = "";
   document.body.appendChild(link);
   link.click();
@@ -1397,6 +1400,7 @@ els.closeCompleteDialogX.addEventListener("click", () => els.completeDialog.clos
 els.loadTimesheet.addEventListener("click", loadTimesheet);
 els.timesheetMonth.addEventListener("change", loadTimesheet);
 els.timesheetTutor.addEventListener("change", loadTimesheet);
+els.timesheetOrder.addEventListener("change", loadTimesheet);
 els.downloadTimesheet.addEventListener("click", openTimesheetDownload);
 els.downloadTimesheetPdf.addEventListener("click", openTimesheetPdf);
 els.submitTimesheet.addEventListener("click", submitTimesheet);

@@ -1230,6 +1230,14 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/timesheet":
             start, end = query_period(query)
             month = query.get("month", [datetime.now().strftime("%Y-%m")])[0]
+            lesson_order = query.get("order", ["date"])[0].lower()
+            if lesson_order not in {"date", "student"}:
+                return self.send_json({"error": "Timesheet order must be 'date' or 'student'."}, 400)
+            order_clause = (
+                "LOWER(s.student_name), COALESCE(b.start_at, lr.completed_at), lr.lesson_record_id"
+                if lesson_order == "student" else
+                "COALESCE(b.start_at, lr.completed_at), LOWER(s.student_name), lr.lesson_record_id"
+            )
             tutor_id = user["user_id"] if user["role"] != "Master" or PERSONAL_WORKSPACE else int(query.get("tutor_id", [user["user_id"]])[0] or user["user_id"])
             with db() as conn:
                 tutor_record = conn.execute(
@@ -1252,7 +1260,7 @@ class Handler(SimpleHTTPRequestHandler):
                     JOIN students s ON s.student_id = lr.student_id
                     JOIN users u ON u.user_id = lr.tutor_id
                     WHERE lr.tutor_id = ? AND lr.completed_at >= ? AND lr.completed_at < ?
-                    ORDER BY lr.completed_at
+                    ORDER BY {order_clause}
                     """,
                     (tutor_id, start, end),
                 ))

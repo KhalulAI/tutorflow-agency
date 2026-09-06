@@ -195,8 +195,12 @@
         <section class="panel">
           <div class="toolbar">
             <select id="timesheetTutor" class="master-only personal-hidden"></select>
+            <select id="timesheetOrder" aria-label="Timesheet lesson order">
+              <option value="date">Date order</option>
+              <option value="student">Grouped by student</option>
+            </select>
             <button id="loadTimesheet" type="button">Refresh</button>
-            <button id="downloadTimesheet" type="button">Download CSV</button>
+            <button id="downloadTimesheet" type="button">Download Excel/CSV</button>
             <button id="downloadTimesheetPdf" type="button">Download PDF</button>
             <button id="submitTimesheet" class="personal-hidden" type="button">Mark Submitted To Scott</button>
             <button id="approveTimesheet" class="master-only personal-hidden" type="button">Approve</button>
@@ -410,6 +414,6 @@
       </form>
     </dialog>
 
-    <script src="/app.js?v=quick-home-notes-1"></script>
+    <script src="/app.js?v=timesheet-ordering-1"></script>
   </body>
 </html>

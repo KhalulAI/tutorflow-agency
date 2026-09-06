@@ -1,4 +1,5 @@
 import base64
+import csv
 import http.cookiejar
 import json
 import os
@@ -6,7 +7,7 @@ import tempfile
 import threading
 import unittest
 from datetime import datetime
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, Request, build_opener
@@ -216,6 +217,77 @@ class AgencyApiTests(unittest.TestCase):
         updated = updated_bookings["bookings"][0]
         self.assertEqual(updated["parent_summary"], "Excellent progress today.")
         self.assertEqual(updated["attendance_status"], "Completed")
+
+    def test_timesheet_can_order_lessons_by_date_or_group_by_student(self):
+        user = self.login_as_master()
+        for student_name in ("Zulu Student", "Alpha Student"):
+            self.api(
+                "/api/students",
+                "POST",
+                {
+                    "student_name": student_name,
+                    "parent_email": f"{student_name.split()[0].lower()}@example.com",
+                    "hourly_rate": 60,
+                    "tutor_hourly_rate": 40,
+                },
+            )
+        _, students = self.api("/api/students")
+        student_ids = {student["student_name"]: student["student_id"] for student in students["students"]}
+        month = datetime.now().strftime("%Y-%m")
+        lesson_specs = (
+            ("Zulu Student", f"{month}-02T16:00:00"),
+            ("Alpha Student", f"{month}-01T16:00:00"),
+            ("Alpha Student", f"{month}-03T16:00:00"),
+        )
+        for student_name, start_at in lesson_specs:
+            self.api(
+                "/api/bookings",
+                "POST",
+                {
+                    "student_id": student_ids[student_name],
+                    "tutor_id": user["user_id"],
+                    "start_at": start_at,
+                    "duration_minutes": 60,
+                },
+            )
+        _, bookings = self.api(f"/api/bookings?month={month}")
+        for booking in bookings["bookings"]:
+            self.api(
+                f"/api/bookings/{booking['booking_id']}/complete",
+                "POST",
+                {"attendance_status": "Completed", "parent_summary": "", "emailed_to_parent": False},
+            )
+
+        _, by_date = self.api(f"/api/timesheet?month={month}&order=date")
+        self.assertEqual(
+            [lesson["student_name"] for lesson in by_date["lessons"]],
+            ["Alpha Student", "Zulu Student", "Alpha Student"],
+        )
+        _, by_student = self.api(f"/api/timesheet?month={month}&order=student")
+        self.assertEqual(
+            [lesson["student_name"] for lesson in by_student["lessons"]],
+            ["Alpha Student", "Alpha Student", "Zulu Student"],
+        )
+        self.assertLess(by_student["lessons"][0]["start_at"], by_student["lessons"][1]["start_at"])
+
+        csv_request = Request(self.base_url + f"/api/timesheet?month={month}&order=student&format=csv")
+        with self.opener.open(csv_request) as response:
+            spreadsheet_rows = list(csv.DictReader(StringIO(response.read().decode("utf-8-sig"))))
+        self.assertEqual(
+            [row["Student"] for row in spreadsheet_rows],
+            ["Alpha Student", "Alpha Student", "Zulu Student"],
+        )
+
+        pdf_request = Request(self.base_url + f"/api/timesheet?month={month}&order=student&format=pdf")
+        with self.opener.open(pdf_request) as response:
+            pdf_text = "\n".join(
+                page.extract_text() or "" for page in PdfReader(BytesIO(response.read())).pages
+            )
+        self.assertLess(pdf_text.find("Alpha Student"), pdf_text.find("Zulu Student"))
+
+        with self.assertRaises(HTTPError) as invalid_order:
+            self.api(f"/api/timesheet?month={month}&order=unknown")
+        self.assertEqual(invalid_order.exception.code, 400)
 
     def test_personal_owner_teaches_without_duplicate_tutor_cost(self):
         user = self.login_as_master()
