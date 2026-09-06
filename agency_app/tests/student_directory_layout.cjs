@@ -34,6 +34,7 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
           '/api/bookings': { bookings: [
             { booking_id: 1, student_id: 1, student_name: longName, tutor_id: 2, tutor_name: 'Test Tutor', start_at: '2026-09-10T16:00:00', duration_minutes: 45, status: 'Booked', month_locked: 0 },
             { booking_id: 2, student_id: 2, student_name: 'Second Student', tutor_id: 2, tutor_name: 'Test Tutor', start_at: '2026-09-11T16:00:00', duration_minutes: 60, status: 'Completed', month_locked: 0 },
+            { booking_id: 3, student_id: 1, student_name: longName, tutor_id: 2, tutor_name: 'Test Tutor', parent_email: parentEmails, start_at: '2020-01-02T16:00:00', duration_minutes: 60, status: 'Booked', month_locked: 0 },
           ], month_locked: false },
           '/api/reports/lessons': { lessons: [] },
         };
@@ -54,6 +55,15 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
       assert.equal(await page.title(), 'Scott Linger - TutorFlow');
       assert.equal(await page.locator('.sidebar h1').textContent(), 'Scott Linger');
       if (role === 'Master') {
+        await page.waitForFunction(() => document.querySelector('#completionList [data-quick-complete="3"]'));
+        await page.waitForTimeout(25);
+        await page.locator('#completionList [data-quick-complete="3"]').click();
+        assert.equal(await page.locator('#completeDialog').evaluate(dialog => dialog.open), true);
+        assert.match(await page.locator('#completeContext').textContent(), new RegExp(longName));
+        assert.match(await page.locator('#completeRecipient').textContent(), /averylongparentemailaddress@example\.com/);
+        assert.equal(await page.locator('#emailParent').isChecked(), true);
+        assert.equal(await page.locator('#emailParent').isEnabled(), true);
+        await page.locator('#closeCompleteDialogX').click();
         assert.equal(await page.locator('#assignedTutor option[value="2"]').count(), 1);
         assert.equal(await page.locator('#bookingTutor option[value="2"]').count(), 1);
         assert.equal(await page.locator('#timesheetTutor option[value="2"]').count(), 1);

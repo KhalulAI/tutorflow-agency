@@ -81,6 +81,7 @@ const els = {
   completeDialog: $("#completeDialog"),
   completeForm: $("#completeForm"),
   completeContext: $("#completeContext"),
+  completeRecipient: $("#completeRecipient"),
   completeBookingId: $("#completeBookingId"),
   attendanceStatus: $("#attendanceStatus"),
   parentSummary: $("#parentSummary"),
@@ -992,20 +993,24 @@ async function saveBooking(event) {
   }
 }
 
-function openCompleteDialog(bookingId) {
-  const booking = bookings.find((item) => Number(item.booking_id) === Number(bookingId));
+function openCompleteDialog(bookingId, bookingOverride = null) {
+  const booking = bookingOverride || bookings.find((item) => Number(item.booking_id) === Number(bookingId));
   if (!booking) return;
   els.completeBookingId.value = booking.booking_id;
   els.completeContext.textContent = personalWorkspace
     ? `${booking.student_name} / ${formatDateTime(booking.start_at)}`
     : `${booking.student_name} with ${booking.tutor_name} / ${formatDateTime(booking.start_at)}`;
+  els.completeRecipient.textContent = booking.parent_email
+    ? `Email recipient: ${booking.parent_email}`
+    : "No parent email address is saved for this student.";
   els.attendanceStatus.value = booking.attendance_status || "Completed";
   els.parentSummary.value = booking.parent_summary || "";
-  els.emailParent.checked = booking.status !== "Completed";
+  els.emailParent.checked = booking.status !== "Completed" && Boolean(booking.parent_email);
   const bookingLocked = Boolean(booking.month_locked);
   els.completeForm.querySelectorAll("select, textarea, input, button[type='submit']").forEach((control) => {
     control.disabled = bookingLocked;
   });
+  els.emailParent.disabled = bookingLocked || !booking.parent_email;
   els.completeMessage.textContent = bookingLocked ? "This month is locked for invoicing. Lesson notes are view-only." : "";
   els.completeDialog.showModal();
 }
@@ -1061,9 +1066,15 @@ async function loadHome() {
     <article class="stat"><span class="eyebrow">Need Notes</span><strong>${incomplete.length}</strong><small>Past lessons incomplete</small></article>
     ${personalWorkspace ? `<article class="stat"><span class="eyebrow">Income</span><strong>${money(done.reduce((sum, lesson) => sum + Number(lesson.student_rate || 0) * Number(lesson.duration_minutes || 0) / 60, 0))}</strong><small>Completed lessons this month</small></article>` : `<article class="stat"><span class="eyebrow">Tutors</span><strong>${tutors.length}</strong><small>Tutor accounts</small></article>`}
   `;
-  els.upcomingList.innerHTML = upcoming.length ? upcoming.map(bookingItem).join("") : `<div class="notice">No upcoming lessons this month.</div>`;
-  els.completionList.innerHTML = incomplete.length ? incomplete.map(bookingItem).join("") : `<div class="notice">No overdue lesson notes.</div>`;
+  els.upcomingList.innerHTML = upcoming.length ? upcoming.map((booking) => bookingItem(booking, false)).join("") : `<div class="notice">No upcoming lessons this month.</div>`;
+  els.completionList.innerHTML = incomplete.length ? incomplete.map((booking) => bookingItem(booking, true)).join("") : `<div class="notice">No overdue lesson notes.</div>`;
   $$("[data-open-calendar]").forEach((button) => button.addEventListener("click", () => switchTab("calendar")));
+  $$("[data-quick-complete]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const booking = monthBookings.find((item) => Number(item.booking_id) === Number(button.dataset.quickComplete));
+      openCompleteDialog(Number(button.dataset.quickComplete), booking);
+    });
+  });
 }
 
 function updateCompletedPeriodFields() {
@@ -1130,13 +1141,15 @@ function completedLessonItem(lesson) {
   `;
 }
 
-function bookingItem(booking) {
+function bookingItem(booking, quickComplete = false) {
   return `
     <article class="item">
       <div class="item-head"><h4>${escapeHtml(booking.student_name)}</h4><span class="pill">${escapeHtml(booking.status)}</span></div>
       <p>${formatDateTime(booking.start_at)} / ${booking.duration_minutes} mins</p>
       ${personalWorkspace ? "" : `<p>${escapeHtml(booking.tutor_name)}</p>`}
-      <button type="button" data-open-calendar>Open Calendar</button>
+      ${quickComplete
+        ? `<button type="button" data-quick-complete="${booking.booking_id}">Add Notes / Email Parent</button>`
+        : `<button type="button" data-open-calendar>Open Calendar</button>`}
     </article>
   `;
 }
