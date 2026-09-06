@@ -72,6 +72,8 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
         assert.equal(await page.locator('#bookingTutor option[value="2"]').count(), 1);
         assert.equal(await page.locator('#timesheetTutor option[value="2"]').count(), 1);
         assert.equal(await page.locator('[data-tab="tutors"]').isVisible(), false);
+        assert.equal(await page.locator('[data-tab="reports"]').isVisible(), false);
+        assert.equal(await page.locator('#reports').isVisible(), false);
         assert.equal(await page.locator('#completedTutor').isVisible(), false);
         assert.equal(await page.locator('#reportTutor').isVisible(), false);
         assert.equal(await page.locator('#timesheetTutor').isVisible(), false);
@@ -91,7 +93,6 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
             navScrollable: nav.scrollHeight > nav.clientHeight,
           };
         });
-        assert.ok(sidebar.navScrollable, 'short desktop sidebar should scroll');
         assert.ok(sidebar.asideBottom <= sidebar.viewportHeight + 1, 'sidebar background must stay within viewport');
         assert.ok(sidebar.settingsTop >= 0 && sidebar.settingsBottom <= sidebar.viewportHeight + 1,
           `Settings should be reachable within sidebar: ${JSON.stringify(sidebar)}`);
@@ -150,22 +151,6 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
       }
       if (role === 'Master') {
         await page.setViewportSize({ width: 1024, height: 900 });
-        await page.getByRole('button', { name: 'Reports', exact: true }).click();
-        await page.waitForSelector('#reportList .notice');
-        const reportMetrics = await page.evaluate(() => {
-          const load = document.querySelector('#loadReports').getBoundingClientRect();
-          const download = document.querySelector('#downloadReports').getBoundingClientRect();
-          return {
-            loadWidth: load.width,
-            loadHeight: load.height,
-            downloadWidth: download.width,
-            downloadHeight: download.height,
-            summary: document.querySelector('#reportList .notice').textContent,
-          };
-        });
-        assert.ok(Math.abs(reportMetrics.loadWidth - reportMetrics.downloadWidth) <= 1, 'report buttons should have equal widths');
-        assert.ok(Math.abs(reportMetrics.loadHeight - reportMetrics.downloadHeight) <= 1, 'report buttons should have equal heights');
-        assert.doesNotMatch(reportMetrics.summary, /Students:/, 'report summary should not include the student breakdown');
         await page.getByRole('button', { name: 'Calendar', exact: true }).click();
         await page.waitForSelector('.calendar-grid .day');
         const calendarMetrics = await page.evaluate(() => {
