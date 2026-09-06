@@ -31,7 +31,10 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
           '/api/session': { user },
           '/api/students': { students: [student, { ...student, student_id: 2, student_name: 'Second Student', active: 0 }] },
           '/api/users': { users: [user, { ...user, user_id: 3, role: 'Tutor' }] },
-          '/api/bookings': { bookings: [], month_locked: false },
+          '/api/bookings': { bookings: [
+            { booking_id: 1, student_id: 1, student_name: longName, tutor_id: 2, tutor_name: 'Test Tutor', start_at: '2026-09-10T16:00:00', duration_minutes: 45, status: 'Booked', month_locked: 0 },
+            { booking_id: 2, student_id: 2, student_name: 'Second Student', tutor_id: 2, tutor_name: 'Test Tutor', start_at: '2026-09-11T16:00:00', duration_minutes: 60, status: 'Booked', month_locked: 0 },
+          ], month_locked: false },
           '/api/reports/lessons': { lessons: [] },
         };
         if (responses[url.pathname]) {
@@ -139,11 +142,17 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
           const date = document.querySelector('#bookingDate').getBoundingClientRect();
           const time = document.querySelector('#bookingTime').getBoundingClientRect();
           const day = document.querySelector('.calendar-grid .day');
+          const lessonBlocks = [...document.querySelectorAll('.booking-chip')].map(element => ({
+            height: element.getBoundingClientRect().height,
+            background: getComputedStyle(element).backgroundColor,
+          }));
           return {
             dateRight: date.right,
             timeLeft: time.left,
             dayMinHeight: parseFloat(getComputedStyle(day).minHeight),
             dayOverflowY: getComputedStyle(day).overflowY,
+            legendItems: document.querySelectorAll('.calendar-legend-item').length,
+            lessonBlocks,
             pageScrollWidth: document.documentElement.scrollWidth,
             pageWidth: document.documentElement.clientWidth,
           };
@@ -151,6 +160,9 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
         assert.ok(calendarMetrics.dateRight < calendarMetrics.timeLeft, `date and time controls overlap: ${JSON.stringify(calendarMetrics)}`);
         assert.ok(calendarMetrics.dayMinHeight >= 220, 'calendar days should have more vertical room');
         assert.equal(calendarMetrics.dayOverflowY, 'visible', 'calendar days should not have individual scrollbars');
+        assert.equal(calendarMetrics.legendItems, 2, 'calendar should show a colour key for visible students');
+        assert.ok(calendarMetrics.lessonBlocks[1].height > calendarMetrics.lessonBlocks[0].height, 'a 60-minute lesson should be taller than a 45-minute lesson');
+        assert.notEqual(calendarMetrics.lessonBlocks[0].background, calendarMetrics.lessonBlocks[1].background, 'students should have different calendar colours');
         assert.ok(calendarMetrics.pageScrollWidth <= calendarMetrics.pageWidth + 1, 'calendar page should not overflow horizontally');
       }
       assert.deepEqual(errors, []);

@@ -76,6 +76,7 @@ const els = {
   bookingRepeat: $("#bookingRepeat"),
   bookingNotes: $("#bookingNotes"),
   bookingMessage: $("#bookingMessage"),
+  calendarLegend: $("#calendarLegend"),
   calendarGrid: $("#calendarGrid"),
   completeDialog: $("#completeDialog"),
   completeForm: $("#completeForm"),
@@ -819,24 +820,38 @@ function renderCalendar() {
   const offset = (first.getDay() + 6) % 7;
   const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const cells = weekdays.map((day) => `<div class="calendar-weekday">${day}</div>`);
+  const visibleStudents = [...new Map(
+    bookings.map((booking) => [String(booking.student_id), booking])
+  ).values()].sort((left, right) => left.student_name.localeCompare(right.student_name, "en-GB", { sensitivity: "base" }));
+  els.calendarLegend.innerHTML = visibleStudents.map((booking) => {
+    const colour = studentCalendarColour(booking.student_id);
+    return `<span class="calendar-legend-item"><i style="--student-colour:${colour.border};--student-bg:${colour.background}"></i>${escapeHtml(booking.student_name)}</span>`;
+  }).join("");
+  els.calendarLegend.hidden = visibleStudents.length === 0;
   for (let i = 0; i < offset; i += 1) {
     cells.push(`<div class="day muted-day"></div>`);
   }
   for (let day = 1; day <= days; day += 1) {
     const iso = `${els.calendarMonth.value}-${String(day).padStart(2, "0")}`;
     const dayBookings = bookings.filter((booking) => booking.start_at.slice(0, 10) === iso);
+    const dayDate = new Date(year, month - 1, day);
+    const isWeekend = dayDate.getDay() === 0 || dayDate.getDay() === 6;
+    const isToday = iso === today();
     cells.push(`
-      <div class="day">
+      <div class="day${isWeekend ? " weekend" : ""}${isToday ? " today" : ""}">
         <div class="day-header">
           <span class="day-number">${day}</span>
           ${dayBookings.length ? `<span class="day-count">${dayBookings.length}</span>` : ""}
         </div>
-        ${dayBookings.map((booking) => `
-          <button class="booking-chip" type="button" data-complete-booking="${booking.booking_id}">
+        ${dayBookings.map((booking) => {
+          const colour = studentCalendarColour(booking.student_id);
+          const blockHeight = Math.max(34, Math.min(122, 10 + Number(booking.duration_minutes || 60) * 0.8));
+          return `
+          <button class="booking-chip${booking.status === "Cancelled" ? " cancelled" : ""}" type="button" data-complete-booking="${booking.booking_id}" style="--student-colour:${colour.border};--student-bg:${colour.background};--lesson-height:${blockHeight}px">
             <strong>${formatTime(booking.start_at)} ${escapeHtml(booking.student_name)}</strong>
-            <span>${escapeHtml(booking.tutor_name)} / ${escapeHtml(booking.status)}</span>
+            <span>${booking.duration_minutes} mins / ${personalWorkspace ? "" : `${escapeHtml(booking.tutor_name)} / `}${escapeHtml(booking.status)}</span>
           </button>
-        `).join("")}
+        `;}).join("")}
       </div>
     `);
   }
@@ -844,6 +859,16 @@ function renderCalendar() {
   $$("[data-complete-booking]").forEach((button) => {
     button.addEventListener("click", () => openBookingDialog(Number(button.dataset.completeBooking)));
   });
+}
+
+function studentCalendarColour(studentId) {
+  const text = String(studentId ?? "");
+  const hash = [...text].reduce((total, character) => ((total * 31) + character.charCodeAt(0)) >>> 0, 0);
+  const hue = Math.round((hash * 137.508) % 360);
+  return {
+    background: `hsl(${hue} 58% 91%)`,
+    border: `hsl(${hue} 48% 38%)`,
+  };
 }
 
 function openBookingDialog(bookingId) {

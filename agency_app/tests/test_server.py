@@ -837,6 +837,65 @@ class AgencyApiTests(unittest.TestCase):
         self.assertEqual(len(remaining["bookings"]), 1)
         self.assertEqual(remaining["bookings"][0]["start_at"], "2026-09-03T16:00:00")
 
+    def test_lesson_overlap_protection_for_students_tutors_and_repeating_courses(self):
+        self.login_as_master()
+        for name, email in (("First Tutor", "first@example.com"), ("Second Tutor", "second@example.com")):
+            self.api("/api/users", "POST", {"name": name, "email": email, "hourly_rate": 40})
+        _, users = self.api("/api/users")
+        first_tutor = next(item for item in users["users"] if item["email"] == "first@example.com")
+        second_tutor = next(item for item in users["users"] if item["email"] == "second@example.com")
+        self.api("/api/students", "POST", {"student_name": "First Student", "assigned_tutor_id": first_tutor["user_id"]})
+        self.api("/api/students", "POST", {"student_name": "Second Student", "assigned_tutor_id": first_tutor["user_id"]})
+        _, student_data = self.api("/api/students")
+        first_student = next(item for item in student_data["students"] if item["student_name"] == "First Student")
+        second_student = next(item for item in student_data["students"] if item["student_name"] == "Second Student")
+
+        self.api(
+            "/api/bookings", "POST",
+            {"student_id": first_student["student_id"], "tutor_id": first_tutor["user_id"],
+             "start_at": "2026-09-10T16:00:00", "duration_minutes": 60},
+        )
+        conflicting_bookings = (
+            {"student_id": second_student["student_id"], "tutor_id": first_tutor["user_id"],
+             "start_at": "2026-09-10T16:30:00", "duration_minutes": 45},
+            {"student_id": first_student["student_id"], "tutor_id": second_tutor["user_id"],
+             "start_at": "2026-09-10T16:45:00", "duration_minutes": 30},
+        )
+        for booking in conflicting_bookings:
+            with self.subTest(booking=booking), self.assertRaises(HTTPError) as overlap_error:
+                self.api("/api/bookings", "POST", booking)
+            self.assertEqual(overlap_error.exception.code, 409)
+            error = json.loads(overlap_error.exception.read().decode("utf-8"))
+            self.assertIn("overlaps with First Student", error["error"])
+
+        # Different students with different tutors may legitimately run at the same time.
+        self.api(
+            "/api/bookings", "POST",
+            {"student_id": second_student["student_id"], "tutor_id": second_tutor["user_id"],
+             "start_at": "2026-09-10T16:30:00", "duration_minutes": 45},
+        )
+        # A lesson beginning exactly when another ends is not an overlap.
+        self.api(
+            "/api/bookings", "POST",
+            {"student_id": second_student["student_id"], "tutor_id": first_tutor["user_id"],
+             "start_at": "2026-09-10T17:15:00", "duration_minutes": 45},
+        )
+
+        self.api(
+            "/api/bookings", "POST",
+            {"student_id": first_student["student_id"], "tutor_id": first_tutor["user_id"],
+             "start_at": "2026-10-15T18:00:00", "duration_minutes": 60},
+        )
+        with self.assertRaises(HTTPError) as repeating_overlap:
+            self.api(
+                "/api/bookings", "POST",
+                {"student_id": first_student["student_id"], "tutor_id": first_tutor["user_id"],
+                 "start_at": "2026-10-01T18:00:00", "duration_minutes": 60, "repeat_weeks": 4},
+            )
+        self.assertEqual(repeating_overlap.exception.code, 409)
+        _, october = self.api("/api/bookings?month=2026-10")
+        self.assertEqual(len(october["bookings"]), 1, "a conflicting recurring course must not be partly created")
+
 
 class TimesheetPdfTests(unittest.TestCase):
     def test_personal_business_branding_and_zero_owner_cost(self):

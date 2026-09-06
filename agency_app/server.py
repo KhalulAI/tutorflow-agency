@@ -545,6 +545,42 @@ def locked_month_message(value: str) -> str:
     return f"{label} is locked for invoicing. Unlock the month from the Calendar before making changes."
 
 
+def overlapping_booking(conn, student_id: int, tutor_id: int, start_at: datetime,
+                        duration_minutes: int, exclude_booking_id: int | None = None):
+    """Return the first active lesson that overlaps for either the student or tutor."""
+    candidates = rows(conn.execute(
+        """
+        SELECT b.booking_id, b.student_id, b.tutor_id, b.start_at, b.duration_minutes,
+               s.student_name, u.name AS tutor_name
+        FROM bookings b
+        JOIN students s ON s.student_id = b.student_id
+        JOIN users u ON u.user_id = b.tutor_id
+        WHERE b.status != 'Cancelled' AND (b.student_id = ? OR b.tutor_id = ?)
+        ORDER BY b.start_at
+        """,
+        (student_id, tutor_id),
+    ))
+    proposed_end = start_at + timedelta(minutes=duration_minutes)
+    for candidate in candidates:
+        if exclude_booking_id is not None and candidate["booking_id"] == exclude_booking_id:
+            continue
+        existing_start = datetime.fromisoformat(candidate["start_at"])
+        existing_end = existing_start + timedelta(minutes=int(candidate["duration_minutes"] or 0))
+        if start_at < existing_end and proposed_end > existing_start:
+            return candidate
+    return None
+
+
+def overlap_message(conflict) -> str:
+    start = datetime.fromisoformat(conflict["start_at"])
+    end = start + timedelta(minutes=int(conflict["duration_minutes"] or 0))
+    return (
+        f"This lesson overlaps with {conflict['student_name']} on "
+        f"{start.strftime('%d %B %Y')} from {start.strftime('%H:%M')} to {end.strftime('%H:%M')}. "
+        "Choose a different time."
+    )
+
+
 def financial_lessons(conn, start_date: date, end_date: date):
     return rows(conn.execute(
         """
@@ -1917,6 +1953,9 @@ class Handler(SimpleHTTPRequestHandler):
             if repeat not in {1, 4, 8, 12, 24}:
                 return self.send_json({"error": "Choose one-off, 4, 8, 12, or 24 weeks."}, 400)
             start = datetime.fromisoformat(payload["start_at"])
+            duration_minutes = int(payload.get("duration_minutes") or 60)
+            if duration_minutes < 15 or duration_minutes > 24 * 60:
+                return self.send_json({"error": "Lesson duration must be between 15 minutes and 24 hours."}, 400)
             item_starts = [start + timedelta(days=7 * week) for week in range(max(1, repeat))]
             series_id = secrets.token_urlsafe(12)
             with db() as conn:
@@ -1938,6 +1977,12 @@ class Handler(SimpleHTTPRequestHandler):
                 if not tutor:
                     return self.send_json({"error": "Choose an active tutor for this booking."}, 400)
                 for item_start in item_starts:
+                    conflict = overlapping_booking(
+                        conn, int(payload["student_id"]), tutor_id, item_start, duration_minutes
+                    )
+                    if conflict:
+                        return self.send_json({"error": overlap_message(conflict)}, 409)
+                for item_start in item_starts:
                     conn.execute(
                         """
                         INSERT INTO bookings
@@ -1949,7 +1994,7 @@ class Handler(SimpleHTTPRequestHandler):
                             int(payload["student_id"]),
                             tutor_id,
                             item_start.replace(microsecond=0).isoformat(),
-                            int(payload.get("duration_minutes") or 60),
+                            duration_minutes,
                             payload.get("notes", ""),
                             user["user_id"],
                             now_iso(),
@@ -2060,6 +2105,15 @@ class Handler(SimpleHTTPRequestHandler):
                 ).fetchone()
                 if not tutor:
                     return self.send_json({"error": "Choose an active tutor for this booking."}, 400)
+                duration_minutes = int(payload.get("duration_minutes") or 60)
+                if duration_minutes < 15 or duration_minutes > 24 * 60:
+                    return self.send_json({"error": "Lesson duration must be between 15 minutes and 24 hours."}, 400)
+                conflict = overlapping_booking(
+                    conn, int(payload["student_id"]), tutor_id,
+                    datetime.fromisoformat(new_start), duration_minutes, booking_id
+                )
+                if conflict:
+                    return self.send_json({"error": overlap_message(conflict)}, 409)
                 conn.execute(
                     """
                     UPDATE bookings
@@ -2070,7 +2124,7 @@ class Handler(SimpleHTTPRequestHandler):
                         int(payload["student_id"]),
                         tutor_id,
                         new_start,
-                        int(payload.get("duration_minutes") or 60),
+                        duration_minutes,
                         payload.get("notes", ""),
                         booking_id,
                     ),
