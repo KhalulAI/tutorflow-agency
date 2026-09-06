@@ -847,7 +847,7 @@ function renderCalendar() {
           const colour = studentCalendarColour(booking.student_id);
           const blockHeight = Math.max(34, Math.min(122, 10 + Number(booking.duration_minutes || 60) * 0.8));
           return `
-          <button class="booking-chip${booking.status === "Cancelled" ? " cancelled" : ""}" type="button" data-complete-booking="${booking.booking_id}" style="--student-colour:${colour.border};--student-bg:${colour.background};--lesson-height:${blockHeight}px">
+          <button class="booking-chip${booking.status === "Cancelled" ? " cancelled" : booking.status === "Completed" ? " completed" : ""}" type="button" data-complete-booking="${booking.booking_id}" style="--student-colour:${colour.border};--student-bg:${colour.background};--lesson-height:${blockHeight}px">
             <strong>${formatTime(booking.start_at)} ${escapeHtml(booking.student_name)}</strong>
             <span>${booking.duration_minutes} mins / ${personalWorkspace ? "" : `${escapeHtml(booking.tutor_name)} / `}${escapeHtml(booking.status)}</span>
           </button>

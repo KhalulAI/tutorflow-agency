@@ -33,7 +33,7 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
           '/api/users': { users: [user, { ...user, user_id: 3, role: 'Tutor' }] },
           '/api/bookings': { bookings: [
             { booking_id: 1, student_id: 1, student_name: longName, tutor_id: 2, tutor_name: 'Test Tutor', start_at: '2026-09-10T16:00:00', duration_minutes: 45, status: 'Booked', month_locked: 0 },
-            { booking_id: 2, student_id: 2, student_name: 'Second Student', tutor_id: 2, tutor_name: 'Test Tutor', start_at: '2026-09-11T16:00:00', duration_minutes: 60, status: 'Booked', month_locked: 0 },
+            { booking_id: 2, student_id: 2, student_name: 'Second Student', tutor_id: 2, tutor_name: 'Test Tutor', start_at: '2026-09-11T16:00:00', duration_minutes: 60, status: 'Completed', month_locked: 0 },
           ], month_locked: false },
           '/api/reports/lessons': { lessons: [] },
         };
@@ -145,6 +145,7 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
           const lessonBlocks = [...document.querySelectorAll('.booking-chip')].map(element => ({
             height: element.getBoundingClientRect().height,
             background: getComputedStyle(element).backgroundColor,
+            completed: element.classList.contains('completed'),
           }));
           return {
             dateRight: date.right,
@@ -163,6 +164,8 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
         assert.equal(calendarMetrics.legendItems, 2, 'calendar should show a colour key for visible students');
         assert.ok(calendarMetrics.lessonBlocks[1].height > calendarMetrics.lessonBlocks[0].height, 'a 60-minute lesson should be taller than a 45-minute lesson');
         assert.notEqual(calendarMetrics.lessonBlocks[0].background, calendarMetrics.lessonBlocks[1].background, 'students should have different calendar colours');
+        assert.equal(calendarMetrics.lessonBlocks[0].completed, false, 'booked lessons should retain their normal appearance');
+        assert.equal(calendarMetrics.lessonBlocks[1].completed, true, 'completed lessons should receive the completed appearance');
         assert.ok(calendarMetrics.pageScrollWidth <= calendarMetrics.pageWidth + 1, 'calendar page should not overflow horizontally');
       }
       assert.deepEqual(errors, []);

@@ -583,6 +583,21 @@ body.tutor .student-table .pill { white-space: normal; }
   background-image: repeating-linear-gradient(135deg, transparent, transparent 6px, rgba(255,255,255,.55) 6px, rgba(255,255,255,.55) 12px);
 }
 
+.booking-chip.completed,
+.booking-chip.completed:hover {
+  border-color: color-mix(in srgb, var(--student-colour) 28%, var(--line));
+  border-left-color: color-mix(in srgb, var(--student-colour) 48%, #fff);
+  background: color-mix(in srgb, var(--student-bg) 42%, #fff);
+  color: color-mix(in srgb, var(--ink) 68%, #fff);
+  box-shadow: none;
+}
+
+.booking-chip.completed span::before {
+  content: "\2713  ";
+  color: var(--teal);
+  font-weight: 900;
+}
+
 .booking-chip strong,
 .booking-chip span {
   min-width: 0;
