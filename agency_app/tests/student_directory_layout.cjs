@@ -68,7 +68,7 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
         assert.equal(await page.locator('#emailParent').isChecked(), true);
         assert.equal(await page.locator('#emailParent').isEnabled(), true);
         await page.locator('#closeCompleteDialogX').click();
-        assert.equal(await page.locator('#assignedTutor option[value="2"]').count(), 1);
+        assert.equal(await page.locator('#studentAssignments').isVisible(), false);
         assert.equal(await page.locator('#bookingTutor option[value="2"]').count(), 1);
         assert.equal(await page.locator('#timesheetTutor option[value="2"]').count(), 1);
         assert.equal(await page.locator('[data-tab="tutors"]').isVisible(), false);
@@ -153,6 +153,24 @@ const parentEmails = 'averylongparentemailaddress@example.com, second.parent@exa
         await page.setViewportSize({ width: 1024, height: 900 });
         await page.getByRole('button', { name: 'Calendar', exact: true }).click();
         await page.waitForSelector('.calendar-grid .day');
+        assert.equal(await page.locator('#calendarPreviousMonth').isVisible(), true);
+        assert.equal(await page.locator('#calendarNextMonth').isVisible(), true);
+        assert.equal(await page.locator('#calendarCurrentMonth').isVisible(), true);
+        assert.equal(await page.locator('#calendarMonth').isVisible(), false);
+        assert.match(await page.locator('#calendarMonthLabel').textContent(), /[A-Za-z]+ 20\d{2}/);
+        const startingMonth = await page.locator('#calendarMonth').inputValue();
+        const [startingYear, startingMonthNumber] = startingMonth.split('-').map(Number);
+        const expectedNextDate = new Date(startingYear, startingMonthNumber, 1);
+        const expectedNextMonth = `${expectedNextDate.getFullYear()}-${String(expectedNextDate.getMonth() + 1).padStart(2, '0')}`;
+        await page.locator('#calendarNextMonth').click();
+        assert.equal(await page.locator('#calendarMonth').inputValue(), expectedNextMonth);
+        assert.equal(await page.locator('#calendarMonthLabel').textContent(), new Intl.DateTimeFormat('en-GB', { month: 'long', year: 'numeric' }).format(expectedNextDate));
+        await page.locator('#calendarPreviousMonth').click();
+        assert.equal(await page.locator('#calendarMonth').inputValue(), startingMonth);
+        await page.locator('#calendarNextMonth').click();
+        await page.locator('#calendarCurrentMonth').click();
+        assert.equal(await page.locator('#calendarMonth').inputValue(), new Date().toISOString().slice(0, 7));
+        await page.waitForFunction(() => document.querySelectorAll('.booking-chip').length >= 2);
         const calendarMetrics = await page.evaluate(() => {
           const date = document.querySelector('#bookingDate').getBoundingClientRect();
           const time = document.querySelector('#bookingTime').getBoundingClientRect();

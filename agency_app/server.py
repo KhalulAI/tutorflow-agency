@@ -290,6 +290,19 @@ def init_db() -> None:
                 FOREIGN KEY(assigned_tutor_id) REFERENCES users(user_id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS student_tutor_assignments (
+                student_id INTEGER NOT NULL,
+                tutor_id INTEGER NOT NULL,
+                subject TEXT NOT NULL DEFAULT '',
+                client_hourly_rate REAL,
+                tutor_hourly_rate REAL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(student_id, tutor_id),
+                FOREIGN KEY(student_id) REFERENCES students(student_id) ON DELETE CASCADE,
+                FOREIGN KEY(tutor_id) REFERENCES users(user_id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS bookings (
                 booking_id {primary_key},
                 series_id TEXT,
@@ -366,6 +379,22 @@ def init_db() -> None:
         ensure_column(conn, "lesson_records", "tutor_hourly_rate", "REAL")
         ensure_column(conn, "students", "tutor_hourly_rate", "REAL")
         ensure_column(conn, "bookings", "series_id", "TEXT")
+        ensure_column(conn, "bookings", "client_hourly_rate", "REAL")
+        ensure_column(conn, "bookings", "tutor_hourly_rate", "REAL")
+        ensure_column(conn, "bookings", "assignment_subject", "TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            """
+            INSERT INTO student_tutor_assignments
+              (student_id, tutor_id, subject, client_hourly_rate, tutor_hourly_rate, active, created_at)
+            SELECT s.student_id, s.assigned_tutor_id, '', NULL, s.tutor_hourly_rate, 1, s.created_at
+            FROM students s
+            WHERE s.assigned_tutor_id IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM student_tutor_assignments sta
+                WHERE sta.student_id = s.student_id AND sta.tutor_id = s.assigned_tutor_id
+              )
+            """
+        )
         conn.execute(
             """
             UPDATE lesson_records
@@ -387,6 +416,98 @@ def init_db() -> None:
             WHERE tutor_hourly_rate IS NULL
             """
         )
+
+
+def optional_nonnegative_rate(value, label: str):
+    if value in (None, ""):
+        return None
+    try:
+        rate = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Enter a valid {label}.") from error
+    if rate < 0:
+        raise ValueError(f"{label.capitalize()} cannot be negative.")
+    return rate
+
+
+def validate_student_assignments(conn, payload):
+    raw_assignments = payload.get("tutor_assignments")
+    if raw_assignments is None:
+        legacy_tutor_id = payload.get("assigned_tutor_id")
+        raw_assignments = ([{
+            "tutor_id": legacy_tutor_id,
+            "tutor_hourly_rate": payload.get("tutor_hourly_rate"),
+        }] if legacy_tutor_id else [])
+    if not isinstance(raw_assignments, list):
+        raise ValueError("Tutor assignments must be a list.")
+    assignments = []
+    tutor_ids = set()
+    for item in raw_assignments:
+        if not isinstance(item, dict) or not item.get("tutor_id"):
+            raise ValueError("Choose a tutor for every assignment.")
+        try:
+            tutor_id = int(item["tutor_id"])
+        except (TypeError, ValueError) as error:
+            raise ValueError("Choose a valid tutor.") from error
+        if tutor_id in tutor_ids:
+            raise ValueError("Each tutor can only be assigned to a student once.")
+        tutor_ids.add(tutor_id)
+        tutor = conn.execute(
+            "SELECT user_id FROM users WHERE user_id = ? AND role = 'Tutor' AND active = 1",
+            (tutor_id,),
+        ).fetchone()
+        if not tutor:
+            raise ValueError("Choose an active tutor or leave the student unassigned.")
+        assignments.append({
+            "tutor_id": tutor_id,
+            "subject": str(item.get("subject", "")).strip()[:120],
+            "client_hourly_rate": optional_nonnegative_rate(item.get("client_hourly_rate"), "client hourly rate"),
+            "tutor_hourly_rate": optional_nonnegative_rate(item.get("tutor_hourly_rate"), "tutor hourly rate"),
+        })
+    return assignments
+
+
+def sync_student_assignments(conn, student_id: int, assignments):
+    conn.execute("UPDATE student_tutor_assignments SET active = 0 WHERE student_id = ?", (student_id,))
+    for assignment in assignments:
+        existing = conn.execute(
+            "SELECT student_id FROM student_tutor_assignments WHERE student_id = ? AND tutor_id = ?",
+            (student_id, assignment["tutor_id"]),
+        ).fetchone()
+        values = (
+            assignment["subject"], assignment["client_hourly_rate"],
+            assignment["tutor_hourly_rate"], student_id, assignment["tutor_id"],
+        )
+        if existing:
+            conn.execute(
+                """
+                UPDATE student_tutor_assignments
+                SET subject = ?, client_hourly_rate = ?, tutor_hourly_rate = ?, active = 1
+                WHERE student_id = ? AND tutor_id = ?
+                """,
+                values,
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO student_tutor_assignments
+                  (subject, client_hourly_rate, tutor_hourly_rate, active, created_at, student_id, tutor_id)
+                VALUES (?, ?, ?, 1, ?, ?, ?)
+                """,
+                (
+                    assignment["subject"], assignment["client_hourly_rate"],
+                    assignment["tutor_hourly_rate"], now_iso(), student_id, assignment["tutor_id"],
+                ),
+            )
+    primary = assignments[0] if assignments else None
+    conn.execute(
+        "UPDATE students SET assigned_tutor_id = ?, tutor_hourly_rate = ? WHERE student_id = ?",
+        (
+            primary["tutor_id"] if primary else None,
+            primary["tutor_hourly_rate"] if primary else None,
+            student_id,
+        ),
+    )
 
 
 def postmark_configured() -> bool:
@@ -1124,32 +1245,67 @@ class Handler(SimpleHTTPRequestHandler):
             )
 
         if path == "/api/students":
-            where, params = self.visible_student_filter(user)
-            student_columns = (
-                "s.*"
-                if user["role"] == "Master"
-                else """s.student_id, s.student_name, s.parent_name, s.parent_email,
-                        s.year_group, s.target_school, s.assigned_tutor_id,
-                        COALESCE(s.tutor_hourly_rate, u.hourly_rate, 0) AS tutor_rate,
-                        s.active, s.created_at"""
-            )
             with db() as conn:
-                students = rows(conn.execute(
-                    f"""
-                    SELECT {student_columns}, u.name AS tutor_name
-                    FROM students s
-                    LEFT JOIN users u ON u.user_id = s.assigned_tutor_id
-                    {where}
-                    ORDER BY s.active DESC, s.student_name
-                    """,
-                    params,
-                ))
+                if user["role"] == "Master":
+                    students = rows(conn.execute(
+                        """
+                        SELECT s.*
+                        FROM students s
+                        ORDER BY s.active DESC, s.student_name
+                        """
+                    ))
+                    assignment_rows = rows(conn.execute(
+                        """
+                        SELECT sta.student_id, sta.tutor_id, sta.subject,
+                               sta.client_hourly_rate, sta.tutor_hourly_rate,
+                               sta.active AS assignment_active,
+                               u.name AS tutor_name, u.active AS tutor_active,
+                               u.hourly_rate AS tutor_default_rate,
+                               COALESCE(sta.client_hourly_rate, s.hourly_rate, 0) AS effective_client_rate,
+                               COALESCE(sta.tutor_hourly_rate, u.hourly_rate, 0) AS effective_tutor_rate
+                        FROM student_tutor_assignments sta
+                        JOIN students s ON s.student_id = sta.student_id
+                        JOIN users u ON u.user_id = sta.tutor_id
+                        WHERE sta.active = 1
+                        ORDER BY u.name
+                        """
+                    ))
+                    by_student = {}
+                    for assignment in assignment_rows:
+                        by_student.setdefault(assignment["student_id"], []).append(assignment)
+                    for student in students:
+                        student["assignments"] = by_student.get(student["student_id"], [])
+                        student["tutor_name"] = ", ".join(
+                            assignment["tutor_name"] for assignment in student["assignments"]
+                        )
+                else:
+                    students = rows(conn.execute(
+                        """
+                        SELECT s.student_id, s.student_name, s.parent_name, s.parent_email,
+                               s.year_group, s.target_school, sta.tutor_id AS assigned_tutor_id,
+                               COALESCE(sta.tutor_hourly_rate, u.hourly_rate, 0) AS tutor_rate,
+                               s.active, s.created_at, u.name AS tutor_name,
+                               sta.subject AS assignment_subject
+                        FROM students s
+                        JOIN student_tutor_assignments sta ON sta.student_id = s.student_id
+                        JOIN users u ON u.user_id = sta.tutor_id
+                        WHERE sta.tutor_id = ? AND sta.active = 1
+                        ORDER BY s.active DESC, s.student_name
+                        """,
+                        (user["user_id"],),
+                    ))
             return self.send_json({"students": students})
 
         if path == "/api/bookings":
             month = query.get("month", [datetime.now().strftime("%Y-%m")])[0]
             start, end = query_period({"month": [month]})
             where, params = self.visible_booking_filter(user, "AND")
+            booking_columns = (
+                "b.*" if user["role"] == "Master"
+                else "b.booking_id, b.series_id, b.student_id, b.tutor_id, b.start_at, "
+                     "b.duration_minutes, b.status, b.notes, b.tutor_hourly_rate, "
+                     "b.assignment_subject, b.created_by, b.created_at"
+            )
             with db() as conn:
                 month_lock = conn.execute(
                     """
@@ -1162,7 +1318,7 @@ class Handler(SimpleHTTPRequestHandler):
                 ).fetchone()
                 bookings = rows(conn.execute(
                     f"""
-                    SELECT b.*, s.student_name, s.parent_email, u.name AS tutor_name,
+                    SELECT {booking_columns}, s.student_name, s.parent_email, u.name AS tutor_name,
                            CASE WHEN EXISTS (
                              SELECT 1 FROM month_locks ml WHERE ml.month = SUBSTR(b.start_at, 1, 7)
                            ) THEN 1 ELSE 0 END AS month_locked,
@@ -1353,7 +1509,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if not DATABASE_URL and DB_PATH.exists():
                     archive.write(DB_PATH, "agency.sqlite3")
                 with db() as conn:
-                    for table in ("users", "students", "bookings", "lesson_records", "expenses", "month_locks"):
+                    for table in ("users", "students", "student_tutor_assignments", "bookings", "lesson_records", "expenses", "month_locks"):
                         archive.writestr(
                             f"{table}.json",
                             json.dumps(rows(conn.execute(f"SELECT * FROM {table}")), indent=2),
@@ -1730,7 +1886,7 @@ class Handler(SimpleHTTPRequestHandler):
                     SELECT
                       (SELECT COUNT(*) FROM bookings WHERE tutor_id = ?) AS booking_count,
                       (SELECT COUNT(*) FROM lesson_records WHERE tutor_id = ?) AS lesson_count,
-                      (SELECT COUNT(*) FROM students WHERE assigned_tutor_id = ?) AS student_count
+                      (SELECT COUNT(*) FROM student_tutor_assignments WHERE tutor_id = ? AND active = 1) AS student_count
                     """,
                     (tutor_id, tutor_id, tutor_id),
                 ).fetchone()
@@ -1752,26 +1908,33 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 parent_emails = normalize_email_list(payload.get("parent_email", ""))
                 client_rate = float(payload.get("hourly_rate") or 0)
-                tutor_rate = float(payload["tutor_hourly_rate"]) if payload.get("tutor_hourly_rate") not in (None, "") else None
             except (TypeError, ValueError) as error:
                 return self.send_json({"error": str(error)}, 400)
-            if client_rate < 0 or (tutor_rate is not None and tutor_rate < 0):
+            if client_rate < 0:
                 return self.send_json({"error": "Hourly rates cannot be negative."}, 400)
-            assigned_tutor_id = user["user_id"] if PERSONAL_WORKSPACE else (int(payload["assigned_tutor_id"]) if payload.get("assigned_tutor_id") else None)
-            if PERSONAL_WORKSPACE:
-                tutor_rate = 0
             with db() as conn:
-                if assigned_tutor_id and not conn.execute(
-                    "SELECT user_id FROM users WHERE user_id = ? AND (role = 'Tutor' OR (role = 'Master' AND ? = 1)) AND active = 1",
-                    (assigned_tutor_id, int(PERSONAL_WORKSPACE)),
-                ).fetchone():
-                    return self.send_json({"error": "Choose an active tutor or leave the student unassigned."}, 400)
-                conn.execute(
+                if PERSONAL_WORKSPACE:
+                    assigned_tutor_id = user["user_id"]
+                    tutor_rate = 0
+                    assignments = []
+                else:
+                    try:
+                        assignments = validate_student_assignments(conn, payload)
+                        primary = assignments[0] if assignments else None
+                        assigned_tutor_id = primary["tutor_id"] if primary else None
+                        tutor_rate = (
+                            primary["tutor_hourly_rate"] if primary
+                            else optional_nonnegative_rate(payload.get("tutor_hourly_rate"), "tutor hourly rate")
+                        )
+                    except ValueError as error:
+                        return self.send_json({"error": str(error)}, 400)
+                created = conn.execute(
                     """
                     INSERT INTO students
                       (student_name, parent_name, parent_email, year_group, target_school,
                        assigned_tutor_id, hourly_rate, tutor_hourly_rate, active, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                    RETURNING student_id
                     """,
                     (
                         payload["student_name"],
@@ -1784,16 +1947,33 @@ class Handler(SimpleHTTPRequestHandler):
                         tutor_rate,
                         now_iso(),
                     ),
-                )
-            return self.send_json({"ok": True})
+                ).fetchone()
+                student_id = created["student_id"]
+                if not PERSONAL_WORKSPACE:
+                    sync_student_assignments(conn, student_id, assignments)
+                    if not assignments and tutor_rate is not None:
+                        conn.execute(
+                            "UPDATE students SET tutor_hourly_rate = ? WHERE student_id = ?",
+                            (tutor_rate, student_id),
+                        )
+            return self.send_json({"ok": True, "student_id": student_id})
 
         if path.startswith("/api/students/") and path.endswith("/assign"):
             if not self.require_master():
                 return
             student_id = int(path.split("/")[3])
             with db() as conn:
-                assigned_to = user["user_id"] if PERSONAL_WORKSPACE else (payload.get("assigned_tutor_id") or None)
-                conn.execute("UPDATE students SET assigned_tutor_id = ? WHERE student_id = ?", (assigned_to, student_id))
+                if PERSONAL_WORKSPACE:
+                    conn.execute(
+                        "UPDATE students SET assigned_tutor_id = ?, tutor_hourly_rate = 0 WHERE student_id = ?",
+                        (user["user_id"], student_id),
+                    )
+                else:
+                    try:
+                        assignments = validate_student_assignments(conn, payload)
+                    except ValueError as error:
+                        return self.send_json({"error": str(error)}, 400)
+                    sync_student_assignments(conn, student_id, assignments)
             return self.send_json({"ok": True})
 
         if path.startswith("/api/students/") and path.endswith("/update"):
@@ -1803,20 +1983,26 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 parent_emails = normalize_email_list(payload.get("parent_email", ""))
                 client_rate = float(payload.get("hourly_rate") or 0)
-                tutor_rate = float(payload["tutor_hourly_rate"]) if payload.get("tutor_hourly_rate") not in (None, "") else None
             except (TypeError, ValueError) as error:
                 return self.send_json({"error": str(error)}, 400)
-            if client_rate < 0 or (tutor_rate is not None and tutor_rate < 0):
+            if client_rate < 0:
                 return self.send_json({"error": "Hourly rates cannot be negative."}, 400)
-            assigned_tutor_id = user["user_id"] if PERSONAL_WORKSPACE else (int(payload["assigned_tutor_id"]) if payload.get("assigned_tutor_id") else None)
-            if PERSONAL_WORKSPACE:
-                tutor_rate = 0
             with db() as conn:
-                if assigned_tutor_id and not conn.execute(
-                    "SELECT user_id FROM users WHERE user_id = ? AND (role = 'Tutor' OR (role = 'Master' AND ? = 1)) AND active = 1",
-                    (assigned_tutor_id, int(PERSONAL_WORKSPACE)),
-                ).fetchone():
-                    return self.send_json({"error": "Choose an active tutor or leave the student unassigned."}, 400)
+                if PERSONAL_WORKSPACE:
+                    assigned_tutor_id = user["user_id"]
+                    tutor_rate = 0
+                    assignments = []
+                else:
+                    try:
+                        assignments = validate_student_assignments(conn, payload)
+                        primary = assignments[0] if assignments else None
+                        assigned_tutor_id = primary["tutor_id"] if primary else None
+                        tutor_rate = (
+                            primary["tutor_hourly_rate"] if primary
+                            else optional_nonnegative_rate(payload.get("tutor_hourly_rate"), "tutor hourly rate")
+                        )
+                    except ValueError as error:
+                        return self.send_json({"error": str(error)}, 400)
                 conn.execute(
                     """
                     UPDATE students
@@ -1838,6 +2024,13 @@ class Handler(SimpleHTTPRequestHandler):
                         student_id,
                     ),
                 )
+                if not PERSONAL_WORKSPACE:
+                    sync_student_assignments(conn, student_id, assignments)
+                    if not assignments and tutor_rate is not None:
+                        conn.execute(
+                            "UPDATE students SET tutor_hourly_rate = ? WHERE student_id = ?",
+                            (tutor_rate, student_id),
+                        )
             return self.send_json({"ok": True})
 
         if path.startswith("/api/students/") and path.endswith("/remove"):
@@ -1883,8 +2076,10 @@ class Handler(SimpleHTTPRequestHandler):
                     )
                 if mode == "unassign":
                     conn.execute("UPDATE students SET assigned_tutor_id = NULL WHERE student_id = ?", (student_id,))
+                    conn.execute("UPDATE student_tutor_assignments SET active = 0 WHERE student_id = ?", (student_id,))
                 elif mode == "archive":
                     conn.execute("UPDATE students SET assigned_tutor_id = NULL, active = 0 WHERE student_id = ?", (student_id,))
+                    conn.execute("UPDATE student_tutor_assignments SET active = 0 WHERE student_id = ?", (student_id,))
                 else:
                     conn.execute("DELETE FROM students WHERE student_id = ?", (student_id,))
             return self.send_json({
@@ -1971,19 +2166,46 @@ class Handler(SimpleHTTPRequestHandler):
                 if locked_start:
                     return self.send_json({"error": locked_month_message(locked_start.isoformat())}, 423)
                 student = conn.execute(
-                    "SELECT student_id, assigned_tutor_id, active FROM students WHERE student_id = ?",
+                    "SELECT student_id, assigned_tutor_id, hourly_rate, tutor_hourly_rate, active FROM students WHERE student_id = ?",
                     (int(payload["student_id"]),),
                 ).fetchone()
                 if not student or not student["active"]:
                     return self.send_json({"error": "Choose an active student for this booking."}, 400)
-                if user["role"] != "Master" and student["assigned_tutor_id"] != user["user_id"]:
-                    return self.send_json({"error": "Tutors can only book their assigned students."}, 403)
                 tutor = conn.execute(
-                    "SELECT user_id FROM users WHERE user_id = ? AND role IN ('Master', 'Tutor') AND active = 1",
+                    "SELECT user_id, hourly_rate FROM users WHERE user_id = ? AND role IN ('Master', 'Tutor') AND active = 1",
                     (tutor_id,),
                 ).fetchone()
                 if not tutor:
                     return self.send_json({"error": "Choose an active tutor for this booking."}, 400)
+                if PERSONAL_WORKSPACE:
+                    client_hourly_rate = float(student["hourly_rate"] or 0)
+                    tutor_hourly_rate = 0
+                    assignment_subject = ""
+                else:
+                    assignment = conn.execute(
+                        """
+                        SELECT subject, client_hourly_rate, tutor_hourly_rate
+                        FROM student_tutor_assignments
+                        WHERE student_id = ? AND tutor_id = ? AND active = 1
+                        """,
+                        (student["student_id"], tutor_id),
+                    ).fetchone()
+                    if not assignment and tutor_id == user["user_id"] and tutor["user_id"] == user["user_id"] and user["role"] == "Master":
+                        client_hourly_rate = float(student["hourly_rate"] or 0)
+                        tutor_hourly_rate = float(student["tutor_hourly_rate"] or tutor["hourly_rate"] or 0)
+                        assignment_subject = ""
+                    elif not assignment:
+                        return self.send_json({"error": "Assign this tutor to the student before adding their lesson."}, 400)
+                    else:
+                        client_hourly_rate = float(
+                            assignment["client_hourly_rate"]
+                            if assignment["client_hourly_rate"] is not None else student["hourly_rate"] or 0
+                        )
+                        tutor_hourly_rate = float(
+                            assignment["tutor_hourly_rate"]
+                            if assignment["tutor_hourly_rate"] is not None else tutor["hourly_rate"] or 0
+                        )
+                        assignment_subject = assignment["subject"] or ""
                 for item_start in item_starts:
                     conflict = overlapping_booking(
                         conn, int(payload["student_id"]), tutor_id, item_start, duration_minutes
@@ -1994,8 +2216,9 @@ class Handler(SimpleHTTPRequestHandler):
                     conn.execute(
                         """
                         INSERT INTO bookings
-                          (series_id, student_id, tutor_id, start_at, duration_minutes, notes, created_by, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                          (series_id, student_id, tutor_id, start_at, duration_minutes, notes,
+                           client_hourly_rate, tutor_hourly_rate, assignment_subject, created_by, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             series_id,
@@ -2004,6 +2227,9 @@ class Handler(SimpleHTTPRequestHandler):
                             item_start.replace(microsecond=0).isoformat(),
                             duration_minutes,
                             payload.get("notes", ""),
+                            client_hourly_rate,
+                            tutor_hourly_rate,
+                            assignment_subject,
                             user["user_id"],
                             now_iso(),
                         ),
@@ -2016,11 +2242,14 @@ class Handler(SimpleHTTPRequestHandler):
             with db() as conn:
                 booking = conn.execute(
                     """
-                    SELECT b.*, u.role AS teacher_role, s.parent_email, s.student_name, s.hourly_rate AS client_hourly_rate,
-                           COALESCE(s.tutor_hourly_rate, u.hourly_rate) AS tutor_hourly_rate
+                    SELECT b.*, u.role AS teacher_role, s.parent_email, s.student_name,
+                           COALESCE(b.client_hourly_rate, sta.client_hourly_rate, s.hourly_rate, 0) AS effective_client_hourly_rate,
+                           COALESCE(b.tutor_hourly_rate, sta.tutor_hourly_rate, s.tutor_hourly_rate, u.hourly_rate, 0) AS effective_tutor_hourly_rate
                     FROM bookings b
                     JOIN students s ON s.student_id = b.student_id
                     JOIN users u ON u.user_id = b.tutor_id
+                    LEFT JOIN student_tutor_assignments sta
+                      ON sta.student_id = b.student_id AND sta.tutor_id = b.tutor_id
                     WHERE b.booking_id = ?
                     """,
                     (booking_id,),
@@ -2055,8 +2284,8 @@ class Handler(SimpleHTTPRequestHandler):
                         payload.get("parent_summary", ""),
                         0,
                         booking["duration_minutes"],
-                        booking["client_hourly_rate"],
-                        0 if PERSONAL_WORKSPACE and booking["teacher_role"] == "Master" else booking["tutor_hourly_rate"],
+                        booking["effective_client_hourly_rate"],
+                        0 if PERSONAL_WORKSPACE and booking["teacher_role"] == "Master" else booking["effective_tutor_hourly_rate"],
                         now_iso(),
                         now_iso(),
                     ),
@@ -2108,11 +2337,46 @@ class Handler(SimpleHTTPRequestHandler):
                 if user["role"] != "Master" and tutor_id != user["user_id"]:
                     return self.send_json({"error": "Tutors can only keep lessons assigned to themselves."}, 403)
                 tutor = conn.execute(
-                    "SELECT user_id FROM users WHERE user_id = ? AND role IN ('Master', 'Tutor') AND active = 1",
+                    "SELECT user_id, hourly_rate FROM users WHERE user_id = ? AND role IN ('Master', 'Tutor') AND active = 1",
                     (tutor_id,),
                 ).fetchone()
                 if not tutor:
                     return self.send_json({"error": "Choose an active tutor for this booking."}, 400)
+                student = conn.execute(
+                    "SELECT student_id, hourly_rate, tutor_hourly_rate, active FROM students WHERE student_id = ?",
+                    (int(payload["student_id"]),),
+                ).fetchone()
+                if not student or not student["active"]:
+                    return self.send_json({"error": "Choose an active student for this booking."}, 400)
+                if PERSONAL_WORKSPACE:
+                    client_hourly_rate = float(student["hourly_rate"] or 0)
+                    tutor_hourly_rate = 0
+                    assignment_subject = ""
+                else:
+                    assignment = conn.execute(
+                        """
+                        SELECT subject, client_hourly_rate, tutor_hourly_rate
+                        FROM student_tutor_assignments
+                        WHERE student_id = ? AND tutor_id = ? AND active = 1
+                        """,
+                        (student["student_id"], tutor_id),
+                    ).fetchone()
+                    if not assignment and tutor_id == user["user_id"] and tutor["user_id"] == user["user_id"] and user["role"] == "Master":
+                        client_hourly_rate = float(student["hourly_rate"] or 0)
+                        tutor_hourly_rate = float(student["tutor_hourly_rate"] or tutor["hourly_rate"] or 0)
+                        assignment_subject = ""
+                    elif not assignment:
+                        return self.send_json({"error": "Assign this tutor to the student before moving their lesson."}, 400)
+                    else:
+                        client_hourly_rate = float(
+                            assignment["client_hourly_rate"]
+                            if assignment["client_hourly_rate"] is not None else student["hourly_rate"] or 0
+                        )
+                        tutor_hourly_rate = float(
+                            assignment["tutor_hourly_rate"]
+                            if assignment["tutor_hourly_rate"] is not None else tutor["hourly_rate"] or 0
+                        )
+                        assignment_subject = assignment["subject"] or ""
                 duration_minutes = int(payload.get("duration_minutes") or 60)
                 if duration_minutes < 15 or duration_minutes > 24 * 60:
                     return self.send_json({"error": "Lesson duration must be between 15 minutes and 24 hours."}, 400)
@@ -2125,7 +2389,8 @@ class Handler(SimpleHTTPRequestHandler):
                 conn.execute(
                     """
                     UPDATE bookings
-                    SET student_id = ?, tutor_id = ?, start_at = ?, duration_minutes = ?, notes = ?
+                    SET student_id = ?, tutor_id = ?, start_at = ?, duration_minutes = ?, notes = ?,
+                        client_hourly_rate = ?, tutor_hourly_rate = ?, assignment_subject = ?
                     WHERE booking_id = ?
                     """,
                     (
@@ -2134,6 +2399,9 @@ class Handler(SimpleHTTPRequestHandler):
                         new_start,
                         duration_minutes,
                         payload.get("notes", ""),
+                        client_hourly_rate,
+                        tutor_hourly_rate,
+                        assignment_subject,
                         booking_id,
                     ),
                 )

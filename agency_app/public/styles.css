@@ -194,6 +194,29 @@ nav {
 
 .calendar-lock-controls input { width: 180px; }
 
+.calendar-month-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.calendar-month-navigation button {
+  white-space: nowrap;
+}
+
+.personal-calendar-control { display: none; }
+body.personal-workspace .personal-calendar-control { display: inline-block; }
+body.personal-workspace #calendarMonth { display: none; }
+
+.calendar-month-label {
+  min-width: 150px;
+  padding: 10px 12px;
+  color: var(--ink);
+  text-align: center;
+}
+
 .pill.locked {
   border-color: color-mix(in srgb, #9b2f2f 35%, var(--line));
   background: #f9e8e5;
@@ -298,6 +321,46 @@ body.tutor #students .grid-two { grid-template-columns: minmax(0, 1fr); }
 .student-table td small { display: block; margin-top: 2px; color: var(--muted); white-space: nowrap; }
 .student-table .email-cell { max-width: 240px; overflow-wrap: anywhere; }
 .student-table .archived-row { opacity: .68; }
+
+.assignment-fieldset {
+  min-width: 0;
+  margin: 4px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.assignment-fieldset legend {
+  padding: 0 6px;
+  color: var(--ink);
+  font-family: var(--display);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.assignment-fieldset > .muted-copy { margin: 0 0 12px; }
+.assignment-editor { display: grid; gap: 10px; }
+
+.tutor-assignment-row {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--soft) 45%, #fff);
+}
+
+.assignment-tutor-toggle {
+  display: flex;
+  flex-direction: row;
+  gap: 9px;
+  align-items: flex-start;
+}
+
+.assignment-tutor-toggle input { width: auto; margin-top: 4px; }
+.assignment-tutor-toggle small { display: block; color: var(--muted); font-weight: 400; }
+.assignment-summary { display: block; margin-bottom: 7px; }
+.assignment-summary:last-child { margin-bottom: 0; }
 
 /* Tutor accounts have fewer columns and must fit without a fixed table width. */
 body.tutor .student-table { min-width: 0; table-layout: fixed; }
@@ -802,6 +865,7 @@ body.personal-workspace #students .grid-two {
   .vat-chart { grid-template-columns: repeat(12, 64px); }
   .calendar-grid { grid-template-columns: repeat(2, 1fr); }
   .calendar-lock-controls { justify-content: flex-start; }
+  .calendar-month-navigation { justify-content: flex-start; }
 }
 
 @media (max-width: 640px) {

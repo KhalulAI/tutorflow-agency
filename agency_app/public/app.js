@@ -58,12 +58,15 @@ const els = {
   yearGroup: $("#yearGroup"),
   targetSchool: $("#targetSchool"),
   studentRate: $("#studentRate"),
-  studentTutorRate: $("#studentTutorRate"),
-  assignedTutor: $("#assignedTutor"),
+  studentAssignments: $("#studentAssignments"),
   studentMessage: $("#studentMessage"),
   studentList: $("#studentList"),
   studentCount: $("#studentCount"),
   calendarMonth: $("#calendarMonth"),
+  calendarMonthLabel: $("#calendarMonthLabel"),
+  calendarPreviousMonth: $("#calendarPreviousMonth"),
+  calendarNextMonth: $("#calendarNextMonth"),
+  calendarCurrentMonth: $("#calendarCurrentMonth"),
   calendarLockStatus: $("#calendarLockStatus"),
   calendarLockNotice: $("#calendarLockNotice"),
   toggleMonthLock: $("#toggleMonthLock"),
@@ -159,8 +162,7 @@ const els = {
   studentEditYearGroup: $("#studentEditYearGroup"),
   studentEditTargetSchool: $("#studentEditTargetSchool"),
   studentEditRate: $("#studentEditRate"),
-  studentEditTutorRate: $("#studentEditTutorRate"),
-  studentEditTutor: $("#studentEditTutor"),
+  studentEditAssignments: $("#studentEditAssignments"),
   studentEditActive: $("#studentEditActive"),
   studentEditMessage: $("#studentEditMessage"),
   closeStudentEditX: $("#closeStudentEditX"),
@@ -339,16 +341,13 @@ async function refreshBaseData() {
 
 function renderSelects() {
   // Include the owner for teaching selections, not tutor management actions.
-  const tutors = personalTeacher ? [personalTeacher, ...userTutors()] : userTutors();
-  const activeTutors = tutors.filter((tutor) => tutor.active);
+  const teachingTutors = personalTeacher ? [personalTeacher, ...userTutors()] : userTutors();
+  const activeTutors = teachingTutors.filter((tutor) => tutor.active);
   const tutorOptions = `<option value="">Choose tutor</option>` + activeTutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
-  els.assignedTutor.innerHTML = tutorOptions;
-  els.studentEditTutor.innerHTML = `<option value="">Unassigned</option>` + tutors.map((tutor) => `<option value="${tutor.user_id}" ${tutor.active ? "" : "disabled"}>${escapeHtml(tutor.name)}${tutor.active ? "" : " (Inactive)"}</option>`).join("");
-  els.bookingTutor.innerHTML = tutorOptions;
-  els.timesheetTutor.innerHTML = tutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
-  els.reportTutor.innerHTML = `<option value="">All tutors</option>` + tutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
-  els.completedTutor.innerHTML = `<option value="">All tutors</option>` + tutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
-  if (!els.timesheetTutor.value && tutors[0]) els.timesheetTutor.value = tutors[0].user_id;
+  els.timesheetTutor.innerHTML = teachingTutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
+  els.reportTutor.innerHTML = `<option value="">All tutors</option>` + teachingTutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
+  els.completedTutor.innerHTML = `<option value="">All tutors</option>` + teachingTutors.map((tutor) => `<option value="${tutor.user_id}">${escapeHtml(tutor.name)}</option>`).join("");
+  if (!els.timesheetTutor.value && teachingTutors[0]) els.timesheetTutor.value = teachingTutors[0].user_id;
 
   const activeStudents = students.filter((student) => student.active);
   const studentOptions = `<option value="">Choose student</option>` + activeStudents.map((student) => `<option value="${student.student_id}">${escapeHtml(student.student_name)}</option>`).join("");
@@ -356,10 +355,89 @@ function renderSelects() {
   els.bookingEditStudent.innerHTML = studentOptions;
   els.reportStudent.innerHTML = `<option value="">All students</option>` + students.map((student) => `<option value="${student.student_id}">${escapeHtml(student.student_name)}${student.active ? "" : " (Archived)"}</option>`).join("");
   els.completedStudent.innerHTML = `<option value="">All students</option>` + students.map((student) => `<option value="${student.student_id}">${escapeHtml(student.student_name)}${student.active ? "" : " (Archived)"}</option>`).join("");
-  els.bookingEditTutor.innerHTML = tutorOptions;
+  renderAssignmentEditor(els.studentAssignments, []);
+  updateBookingTutorOptions(els.bookingStudent.value, els.bookingTutor);
+  updateBookingTutorOptions(els.bookingEditStudent.value, els.bookingEditTutor);
 }
 
 function userTutors() { return tutors; }
+
+function studentAssignmentsFor(student) {
+  if (!student) return [];
+  if (Array.isArray(student.assignments)) return student.assignments;
+  if (!student.assigned_tutor_id) return [];
+  const tutor = tutors.find((item) => Number(item.user_id) === Number(student.assigned_tutor_id));
+  return [{
+    tutor_id: Number(student.assigned_tutor_id),
+    tutor_name: student.tutor_name || tutor?.name || "Tutor",
+    subject: "",
+    client_hourly_rate: null,
+    tutor_hourly_rate: student.tutor_hourly_rate,
+    effective_client_rate: Number(student.hourly_rate || 0),
+    effective_tutor_rate: effectiveStudentTutorRate(student),
+  }];
+}
+
+function renderAssignmentEditor(container, selectedAssignments = []) {
+  if (!container || personalWorkspace) return;
+  const selectedByTutor = new Map(selectedAssignments.map((item) => [Number(item.tutor_id), item]));
+  if (!tutors.length) {
+    container.innerHTML = `<div class="notice">Add a tutor before assigning this student.</div>`;
+    return;
+  }
+  container.innerHTML = tutors.map((tutor) => {
+    const assignment = selectedByTutor.get(Number(tutor.user_id));
+    const checked = Boolean(assignment?.active ?? assignment);
+    return `<div class="tutor-assignment-row" data-assignment-row data-tutor-id="${tutor.user_id}">
+      <label class="assignment-tutor-toggle"><input type="checkbox" data-assignment-enabled ${checked ? "checked" : ""} ${tutor.active ? "" : "disabled"}> <span><strong>${escapeHtml(tutor.name)}</strong><small>Default pay: ${money(tutor.hourly_rate)}/hr${tutor.active ? "" : " · inactive"}</small></span></label>
+      <label><span>Subject / course</span><input data-assignment-subject maxlength="120" value="${escapeHtml(assignment?.subject || "")}" ${checked ? "" : "disabled"}></label>
+      <label><span>Client charge override</span><input data-assignment-client-rate type="number" min="0" step="0.01" placeholder="Student default" value="${assignment?.client_hourly_rate ?? ""}" ${checked ? "" : "disabled"}></label>
+      <label><span>Tutor pay override</span><input data-assignment-tutor-rate type="number" min="0" step="0.01" placeholder="Tutor default" value="${assignment?.tutor_hourly_rate ?? ""}" ${checked ? "" : "disabled"}></label>
+    </div>`;
+  }).join("");
+  container.querySelectorAll("[data-assignment-enabled]").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      checkbox.closest("[data-assignment-row]").querySelectorAll("input:not([data-assignment-enabled])")
+        .forEach((input) => { input.disabled = !checkbox.checked; });
+    });
+  });
+}
+
+function collectTutorAssignments(container) {
+  if (personalWorkspace || !container) return [];
+  return [...container.querySelectorAll("[data-assignment-row]")]
+    .filter((row) => row.querySelector("[data-assignment-enabled]").checked)
+    .map((row) => ({
+      tutor_id: Number(row.dataset.tutorId),
+      subject: row.querySelector("[data-assignment-subject]").value,
+      client_hourly_rate: row.querySelector("[data-assignment-client-rate]").value,
+      tutor_hourly_rate: row.querySelector("[data-assignment-tutor-rate]").value,
+    }));
+}
+
+function updateBookingTutorOptions(studentId, select, selectedTutorId = "") {
+  if (!select) return;
+  if (personalWorkspace && personalTeacher) {
+    select.innerHTML = `<option value="${personalTeacher.user_id}">${escapeHtml(personalTeacher.name)}</option>`;
+    select.value = personalTeacher.user_id;
+    return;
+  }
+  if (currentUser?.role !== "Master") {
+    select.innerHTML = `<option value="${currentUser.user_id}">${escapeHtml(currentUser.name)}</option>`;
+    select.value = currentUser.user_id;
+    return;
+  }
+  const student = students.find((item) => String(item.student_id) === String(studentId));
+  const assignments = studentAssignmentsFor(student).filter((item) => item.active !== false);
+  select.innerHTML = `<option value="">${student ? "Choose assigned tutor" : "Choose a student first"}</option>` + assignments.map((assignment) =>
+    `<option value="${assignment.tutor_id}">${escapeHtml(assignment.tutor_name)}${assignment.subject ? ` · ${escapeHtml(assignment.subject)}` : ""}</option>`
+  ).join("");
+  if (selectedTutorId && assignments.some((item) => Number(item.tutor_id) === Number(selectedTutorId))) {
+    select.value = selectedTutorId;
+  } else if (assignments.length === 1) {
+    select.value = assignments[0].tutor_id;
+  }
+}
 
 async function setupMaster(event) {
   event.preventDefault();
@@ -633,18 +711,23 @@ async function removeTutor(tutorId) {
 async function saveStudent(event) {
   event.preventDefault();
   els.studentMessage.textContent = "Saving student...";
+  const payload = {
+    student_name: els.studentName.value,
+    parent_name: els.parentName.value,
+    parent_email: els.parentEmail.value,
+    year_group: els.yearGroup.value,
+    target_school: els.targetSchool.value,
+    hourly_rate: els.studentRate.value,
+  };
+  if (personalWorkspace) {
+    payload.tutor_hourly_rate = 0;
+    payload.assigned_tutor_id = currentUser.user_id;
+  } else {
+    payload.tutor_assignments = collectTutorAssignments(els.studentAssignments);
+  }
   await api("/api/students", {
     method: "POST",
-    body: JSON.stringify({
-      student_name: els.studentName.value,
-      parent_name: els.parentName.value,
-      parent_email: els.parentEmail.value,
-      year_group: els.yearGroup.value,
-      target_school: els.targetSchool.value,
-      hourly_rate: els.studentRate.value,
-      tutor_hourly_rate: personalWorkspace ? 0 : els.studentTutorRate.value,
-      assigned_tutor_id: personalWorkspace ? currentUser.user_id : els.assignedTutor.value,
-    }),
+    body: JSON.stringify(payload),
   });
   els.studentMessage.textContent = "Student saved.";
   els.studentForm.reset();
@@ -672,10 +755,10 @@ function renderStudents() {
             <td data-label="Student"><strong>${escapeHtml(student.student_name)}</strong></td>
             <td data-label="Parent">${escapeHtml(student.parent_name || "—")}</td>
             <td data-label="Email" class="email-cell">${escapeHtml(student.parent_email || "—")}</td>
-            ${personal ? "" : `<td data-label="Tutor">${escapeHtml(student.tutor_name || "Unassigned")}</td>`}
+            ${personal ? "" : `<td data-label="Tutor">${formatStudentAssignments(student, "tutor")}</td>`}
             ${master ? `
-              <td data-label="Client rate"><strong>${money(student.hourly_rate)}</strong><small>/hr</small></td>
-              ${personal ? "" : `<td data-label="Tutor rate"><strong>${money(effectiveStudentTutorRate(student))}</strong><small>/hr${student.tutor_hourly_rate == null ? " · default" : " · custom"}</small></td>`}
+              <td data-label="Client rate">${personal ? `<strong>${money(student.hourly_rate)}</strong><small>/hr</small>` : formatStudentAssignments(student, "client")}</td>
+              ${personal ? "" : `<td data-label="Tutor rate">${formatStudentAssignments(student, "pay")}</td>`}
               <td data-label="Status"><span class="pill">${student.active ? "Active" : "Archived"}</span></td>
               <td class="table-actions"><button type="button" data-edit-student="${student.student_id}" aria-label="Edit ${escapeHtml(student.student_name)}">Edit</button><button class="ghost dark-ghost" type="button" data-remove-student="${student.student_id}" aria-label="Remove or unassign ${escapeHtml(student.student_name)}">Manage</button></td>
             ` : `<td data-label="Your rate"><strong>${money(student.tutor_rate)}</strong><small>/hr</small></td><td data-label="Status"><span class="pill">${student.active ? "Active" : "Archived"}</span></td>`}
@@ -685,6 +768,23 @@ function renderStudents() {
     </div>`;
   $$("[data-edit-student]").forEach((button) => button.addEventListener("click", () => editStudent(Number(button.dataset.editStudent))));
   $$("[data-remove-student]").forEach((button) => button.addEventListener("click", () => openStudentRemoval(Number(button.dataset.removeStudent))));
+}
+
+function formatStudentAssignments(student, column) {
+  const assignments = studentAssignmentsFor(student).filter((item) => item.active !== false);
+  if (!assignments.length) {
+    if (column === "tutor") return "Unassigned";
+    if (column === "client") return `<strong>${money(student.hourly_rate)}</strong><small>/hr · student default</small>`;
+    return "—";
+  }
+  return assignments.map((assignment) => {
+    if (column === "tutor") {
+      return `<span class="assignment-summary"><strong>${escapeHtml(assignment.tutor_name)}</strong>${assignment.subject ? `<small>${escapeHtml(assignment.subject)}</small>` : ""}</span>`;
+    }
+    const rate = column === "client" ? assignment.effective_client_rate : assignment.effective_tutor_rate;
+    const custom = column === "client" ? assignment.client_hourly_rate != null : assignment.tutor_hourly_rate != null;
+    return `<span class="assignment-summary"><strong>${money(rate)}</strong><small>/hr · ${escapeHtml(assignment.tutor_name)} · ${custom ? "custom" : "default"}</small></span>`;
+  }).join("");
 }
 
 function effectiveStudentTutorRate(student) {
@@ -706,8 +806,7 @@ function editStudent(studentId) {
   els.studentEditYearGroup.value = student.year_group || "";
   els.studentEditTargetSchool.value = student.target_school || "";
   els.studentEditRate.value = student.hourly_rate ?? 0;
-  els.studentEditTutorRate.value = student.tutor_hourly_rate ?? "";
-  els.studentEditTutor.value = student.assigned_tutor_id || "";
+  renderAssignmentEditor(els.studentEditAssignments, studentAssignmentsFor(student));
   els.studentEditActive.checked = Boolean(student.active);
   els.studentEditMessage.textContent = "";
   els.studentEditDialog.showModal();
@@ -717,19 +816,24 @@ async function saveStudentEdit(event) {
   event.preventDefault();
   els.studentEditMessage.textContent = "Saving student...";
   try {
+    const payload = {
+      student_name: els.studentEditName.value,
+      parent_name: els.studentEditParentName.value,
+      parent_email: els.studentEditParentEmail.value,
+      year_group: els.studentEditYearGroup.value,
+      target_school: els.studentEditTargetSchool.value,
+      hourly_rate: els.studentEditRate.value,
+      active: els.studentEditActive.checked,
+    };
+    if (personalWorkspace) {
+      payload.tutor_hourly_rate = 0;
+      payload.assigned_tutor_id = currentUser.user_id;
+    } else {
+      payload.tutor_assignments = collectTutorAssignments(els.studentEditAssignments);
+    }
     await api(`/api/students/${els.studentEditId.value}/update`, {
       method: "POST",
-      body: JSON.stringify({
-        student_name: els.studentEditName.value,
-        parent_name: els.studentEditParentName.value,
-        parent_email: els.studentEditParentEmail.value,
-        year_group: els.studentEditYearGroup.value,
-        target_school: els.studentEditTargetSchool.value,
-        hourly_rate: els.studentEditRate.value,
-        tutor_hourly_rate: personalWorkspace ? 0 : els.studentEditTutorRate.value,
-        assigned_tutor_id: personalWorkspace ? currentUser.user_id : els.studentEditTutor.value,
-        active: els.studentEditActive.checked,
-      }),
+      body: JSON.stringify(payload),
     });
     els.studentEditDialog.close();
     await refreshBaseData();
@@ -744,7 +848,7 @@ function openStudentRemoval(studentId) {
   if (!student) return;
   els.studentRemovalId.value = studentId;
   els.studentRemovalContext.textContent = `Choose what should happen to ${student.student_name}.`;
-  const defaultMode = personalWorkspace ? "archive" : (student.assigned_tutor_id ? "unassign" : "archive");
+  const defaultMode = personalWorkspace ? "archive" : (studentAssignmentsFor(student).length ? "unassign" : "archive");
   const option = document.querySelector(`input[name="studentRemovalMode"][value="${defaultMode}"]`);
   if (option) option.checked = true;
   els.studentRemovalDialog.showModal();
@@ -771,6 +875,7 @@ async function removeStudent(event) {
 }
 
 async function loadCalendar() {
+  els.calendarMonthLabel.textContent = formatMonthLabel(els.calendarMonth.value);
   const data = await api(`/api/bookings?month=${encodeURIComponent(els.calendarMonth.value)}`);
   bookings = data.bookings;
   calendarMonthLocked = Boolean(data.month_locked);
@@ -789,6 +894,18 @@ async function loadCalendar() {
   });
   els.bookingMessage.textContent = calendarMonthLocked ? "Unlock this month to add lessons." : "";
   renderCalendar();
+}
+
+function changeCalendarMonth(offset) {
+  const [year, month] = (els.calendarMonth.value || currentMonth()).split("-").map(Number);
+  const target = new Date(year, month - 1 + offset, 1);
+  els.calendarMonth.value = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, "0")}`;
+  loadCalendar();
+}
+
+function showCurrentCalendarMonth() {
+  els.calendarMonth.value = currentMonth();
+  loadCalendar();
 }
 
 function formatMonthLabel(month) {
@@ -880,7 +997,7 @@ function openBookingDialog(bookingId) {
   els.bookingEditId.value = booking.booking_id;
   els.bookingEditContext.textContent = `${booking.student_name} with ${booking.tutor_name} / ${escapeHtml(booking.status)}`;
   els.bookingEditStudent.value = booking.student_id;
-  els.bookingEditTutor.value = booking.tutor_id;
+  updateBookingTutorOptions(booking.student_id, els.bookingEditTutor, booking.tutor_id);
   els.bookingEditDate.value = datePart(booking.start_at);
   els.bookingEditTime.value = timePart(booking.start_at);
   els.bookingEditDuration.value = booking.duration_minutes || 60;
@@ -971,8 +1088,7 @@ async function deleteBookingSeries() {
 
 async function saveBooking(event) {
   event.preventDefault();
-  const student = students.find((item) => String(item.student_id) === String(els.bookingStudent.value));
-  const tutorId = currentUser.role === "Master" ? els.bookingTutor.value || student?.assigned_tutor_id : currentUser.user_id;
+  const tutorId = currentUser.role === "Master" ? els.bookingTutor.value : currentUser.user_id;
   els.bookingMessage.textContent = "Adding booking...";
   try {
     await api("/api/bookings", {
@@ -1360,6 +1476,8 @@ els.tutorForm.addEventListener("submit", saveTutor);
 els.studentForm.addEventListener("submit", saveStudent);
 els.bookingForm.addEventListener("submit", saveBooking);
 els.bookingEditForm.addEventListener("submit", saveBookingEdit);
+els.bookingStudent.addEventListener("change", () => updateBookingTutorOptions(els.bookingStudent.value, els.bookingTutor));
+els.bookingEditStudent.addEventListener("change", () => updateBookingTutorOptions(els.bookingEditStudent.value, els.bookingEditTutor));
 els.closeBookingDialog.addEventListener("click", () => els.bookingDialog.close());
 els.closeBookingDialogX.addEventListener("click", () => els.bookingDialog.close());
 els.completeBookingFromDialog.addEventListener("click", () => {
@@ -1371,6 +1489,9 @@ els.cancelBookingButton.addEventListener("click", cancelBooking);
 els.deleteBookingButton.addEventListener("click", deleteBooking);
 els.deleteBookingSeriesButton.addEventListener("click", deleteBookingSeries);
 els.calendarMonth.addEventListener("change", loadCalendar);
+els.calendarPreviousMonth.addEventListener("click", () => changeCalendarMonth(-1));
+els.calendarNextMonth.addEventListener("click", () => changeCalendarMonth(1));
+els.calendarCurrentMonth.addEventListener("click", showCurrentCalendarMonth);
 els.toggleMonthLock.addEventListener("click", toggleMonthLock);
 els.homeMonth.addEventListener("change", loadHome);
 els.completedPeriod.addEventListener("change", () => {

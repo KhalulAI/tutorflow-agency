@@ -590,6 +590,116 @@ class AgencyApiTests(unittest.TestCase):
         self.assertNotIn("Client Hourly Rate", tutor_csv)
         self.assertNotIn("Amount Charged", tutor_csv)
 
+    def test_student_can_have_multiple_tutors_with_pairing_specific_rates(self):
+        self.login_as_master()
+        server.send_tutor_credentials_email = lambda *_args, **_kwargs: "message-id"
+        created_tutors = []
+        for name, email, rate in (
+            ("Maths Tutor", "maths@example.com", 30),
+            ("English Tutor", "english@example.com", 35),
+            ("Other Tutor", "other@example.com", 25),
+        ):
+            _, credentials = self.api(
+                "/api/users", "POST", {"name": name, "email": email, "hourly_rate": rate}
+            )
+            created_tutors.append((email, credentials["temporary_password"]))
+        _, users_data = self.api("/api/users")
+        user_by_email = {item["email"]: item for item in users_data["users"]}
+        maths = user_by_email["maths@example.com"]
+        english = user_by_email["english@example.com"]
+        other = user_by_email["other@example.com"]
+
+        self.api(
+            "/api/students",
+            "POST",
+            {
+                "student_name": "Shared Student",
+                "parent_email": "parent@example.com",
+                "hourly_rate": 70,
+                "tutor_assignments": [
+                    {
+                        "tutor_id": maths["user_id"],
+                        "subject": "Maths",
+                        "client_hourly_rate": 75,
+                        "tutor_hourly_rate": 40,
+                    },
+                    {
+                        "tutor_id": english["user_id"],
+                        "subject": "English",
+                        "client_hourly_rate": "",
+                        "tutor_hourly_rate": 45,
+                    },
+                ],
+            },
+        )
+        _, student_data = self.api("/api/students")
+        student = student_data["students"][0]
+        self.assertEqual(len(student["assignments"]), 2)
+        assignments = {item["tutor_id"]: item for item in student["assignments"]}
+        self.assertEqual(assignments[maths["user_id"]]["subject"], "Maths")
+        self.assertEqual(assignments[maths["user_id"]]["effective_client_rate"], 75)
+        self.assertEqual(assignments[maths["user_id"]]["effective_tutor_rate"], 40)
+        self.assertEqual(assignments[english["user_id"]]["effective_client_rate"], 70)
+        self.assertEqual(assignments[english["user_id"]]["effective_tutor_rate"], 45)
+
+        month = datetime.now().strftime("%Y-%m")
+        for tutor, day in ((maths, "20"), (english, "21")):
+            self.api(
+                "/api/bookings",
+                "POST",
+                {
+                    "student_id": student["student_id"],
+                    "tutor_id": tutor["user_id"],
+                    "start_at": f"{month}-{day}T16:00:00",
+                    "duration_minutes": 60,
+                },
+            )
+        with self.assertRaises(HTTPError) as unassigned_error:
+            self.api(
+                "/api/bookings",
+                "POST",
+                {
+                    "student_id": student["student_id"],
+                    "tutor_id": other["user_id"],
+                    "start_at": f"{month}-22T16:00:00",
+                    "duration_minutes": 60,
+                },
+            )
+        self.assertEqual(unassigned_error.exception.code, 400)
+
+        _, booking_data = self.api(f"/api/bookings?month={month}")
+        for booking in booking_data["bookings"]:
+            self.api(
+                f"/api/bookings/{booking['booking_id']}/complete",
+                "POST",
+                {"parent_summary": "Completed", "emailed_to_parent": False},
+            )
+        with server.db() as connection:
+            lesson_rates = {
+                item["tutor_id"]: (item["client_hourly_rate"], item["tutor_hourly_rate"])
+                for item in connection.execute(
+                    "SELECT tutor_id, client_hourly_rate, tutor_hourly_rate FROM lesson_records"
+                )
+            }
+        self.assertEqual(lesson_rates[maths["user_id"]], (75, 40))
+        self.assertEqual(lesson_rates[english["user_id"]], (70, 45))
+
+        for email, temporary_password in created_tutors:
+            tutor_opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+            self.api(
+                "/api/login", "POST", {"email": email, "password": temporary_password}, opener=tutor_opener
+            )
+            _, visible = self.api("/api/students", opener=tutor_opener)
+            if email == "other@example.com":
+                self.assertEqual(visible["students"], [])
+            else:
+                self.assertEqual([item["student_name"] for item in visible["students"]], ["Shared Student"])
+                self.assertNotIn("hourly_rate", visible["students"][0])
+                self.assertNotIn("assignments", visible["students"][0])
+                _, tutor_bookings = self.api(f"/api/bookings?month={month}", opener=tutor_opener)
+                self.assertEqual(len(tutor_bookings["bookings"]), 1)
+                self.assertNotIn("client_hourly_rate", tutor_bookings["bookings"][0])
+
     def test_student_can_be_unassigned_archived_or_permanently_deleted(self):
         self.login_as_master()
         _, created = self.api(
@@ -925,8 +1035,12 @@ class AgencyApiTests(unittest.TestCase):
         _, users = self.api("/api/users")
         first_tutor = next(item for item in users["users"] if item["email"] == "first@example.com")
         second_tutor = next(item for item in users["users"] if item["email"] == "second@example.com")
-        self.api("/api/students", "POST", {"student_name": "First Student", "assigned_tutor_id": first_tutor["user_id"]})
-        self.api("/api/students", "POST", {"student_name": "Second Student", "assigned_tutor_id": first_tutor["user_id"]})
+        tutor_assignments = [
+            {"tutor_id": first_tutor["user_id"]},
+            {"tutor_id": second_tutor["user_id"]},
+        ]
+        self.api("/api/students", "POST", {"student_name": "First Student", "tutor_assignments": tutor_assignments})
+        self.api("/api/students", "POST", {"student_name": "Second Student", "tutor_assignments": tutor_assignments})
         _, student_data = self.api("/api/students")
         first_student = next(item for item in student_data["students"] if item["student_name"] == "First Student")
         second_student = next(item for item in student_data["students"] if item["student_name"] == "Second Student")
