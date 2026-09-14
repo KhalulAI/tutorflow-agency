@@ -241,15 +241,26 @@ body.personal-workspace #calendarMonth { display: none; }
 .panel { padding: 18px; }
 
 #students .grid-two {
-  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   width: 100%;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 #students .grid-two > * { min-width: 0; }
 
 #students.page.active { align-content: start; }
+
+#studentForm {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px 16px;
+}
+
+#studentForm > h3,
+#studentForm > .assignment-fieldset,
+#studentForm > button,
+#studentForm > [role="status"] { grid-column: 1 / -1; }
 
 /* The add-student form is hidden for tutors, so do not leave its narrow column. */
 body.tutor #students .grid-two { grid-template-columns: minmax(0, 1fr); }
@@ -341,24 +352,33 @@ body.tutor #students .grid-two { grid-template-columns: minmax(0, 1fr); }
 .assignment-fieldset > .muted-copy { margin: 0 0 12px; }
 .assignment-editor { display: grid; gap: 10px; }
 
+.assignment-toolbar,
+.assignment-row-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.assignment-toolbar strong { display: block; color: var(--green); }
+.assignment-toolbar small,
+.assignment-default-rate { display: block; color: var(--muted); font-size: .78rem; }
+.assignment-empty { padding: 15px; border: 1px dashed var(--line); border-radius: 7px; color: var(--muted); text-align: center; }
+.assignment-list { display: grid; gap: 10px; }
+
 .tutor-assignment-row {
   display: grid;
-  gap: 9px;
-  padding: 12px;
+  gap: 12px;
+  padding: 14px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: color-mix(in srgb, var(--soft) 45%, #fff);
 }
 
-.assignment-tutor-toggle {
-  display: flex;
-  flex-direction: row;
-  gap: 9px;
-  align-items: flex-start;
-}
-
-.assignment-tutor-toggle input { width: auto; margin-top: 4px; }
-.assignment-tutor-toggle small { display: block; color: var(--muted); font-weight: 400; }
+.assignment-row-head label { flex: 1 1 280px; }
+.assignment-default-rate { flex: 1 1 auto; padding-bottom: 11px; text-align: right; }
+.assignment-remove { flex: 0 0 auto; }
+.assignment-fields { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 12px; }
 .assignment-summary { display: block; margin-bottom: 7px; }
 .assignment-summary:last-child { margin-bottom: 0; }
 
@@ -375,23 +395,23 @@ body.tutor .student-table th:nth-child(6) { width: 11%; }
 body.tutor .student-table .pill { white-space: normal; }
 
 /* Use the panel width, not just the device width (also works with browser zoom). */
-@container student-directory (max-width: 700px) {
-  body.tutor .student-table,
-  body.tutor .student-table tbody { display: block; }
-  body.tutor .student-table thead {
+@container student-directory (max-width: 900px) {
+  .student-table,
+  .student-table tbody { display: block; min-width: 0; }
+  .student-table thead {
     position: absolute;
     width: 1px;
     height: 1px;
     overflow: hidden;
     clip-path: inset(50%);
   }
-  body.tutor .student-table tr {
+  .student-table tr {
     display: grid;
     padding: 10px 12px;
     border-bottom: 1px solid var(--line);
   }
-  body.tutor .student-table tr:last-child { border-bottom: 0; }
-  body.tutor .student-table td {
+  .student-table tr:last-child { border-bottom: 0; }
+  .student-table td {
     display: grid;
     grid-template-columns: minmax(0, 6rem) minmax(0, 1fr);
     column-gap: 10px;
@@ -400,13 +420,14 @@ body.tutor .student-table .pill { white-space: normal; }
     min-width: 0;
     max-width: none;
   }
-  body.tutor .student-table td::before {
+  .student-table td::before {
     content: attr(data-label);
     color: var(--green);
     font-weight: 800;
   }
-  body.tutor .student-table td small { grid-column: 2; }
-  body.tutor .student-table .pill { justify-self: start; }
+  .student-table td small { grid-column: 2; white-space: normal; }
+  .student-table .pill { justify-self: start; }
+  .student-table .table-actions { display: flex; padding-left: 6rem; }
 }
 
 .table-actions {
@@ -869,6 +890,12 @@ body.personal-workspace #students .grid-two {
 }
 
 @media (max-width: 640px) {
+  #studentForm,
+  .assignment-fields { grid-template-columns: 1fr; }
+  .assignment-toolbar,
+  .assignment-row-head { align-items: stretch; flex-direction: column; }
+  .assignment-default-rate { padding: 0; text-align: left; }
+  .assignment-remove { align-self: flex-start; }
   .document-form-grid { grid-template-columns: 1fr; }
   .document-notes { grid-column: auto; }
 }

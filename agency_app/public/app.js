@@ -380,35 +380,73 @@ function studentAssignmentsFor(student) {
 
 function renderAssignmentEditor(container, selectedAssignments = []) {
   if (!container || personalWorkspace) return;
-  const selectedByTutor = new Map(selectedAssignments.map((item) => [Number(item.tutor_id), item]));
   if (!tutors.length) {
     container.innerHTML = `<div class="notice">Add a tutor before assigning this student.</div>`;
     return;
   }
-  container.innerHTML = tutors.map((tutor) => {
-    const assignment = selectedByTutor.get(Number(tutor.user_id));
-    const checked = Boolean(assignment?.active ?? assignment);
-    return `<div class="tutor-assignment-row" data-assignment-row data-tutor-id="${tutor.user_id}">
-      <label class="assignment-tutor-toggle"><input type="checkbox" data-assignment-enabled ${checked ? "checked" : ""} ${tutor.active ? "" : "disabled"}> <span><strong>${escapeHtml(tutor.name)}</strong><small>Default pay: ${money(tutor.hourly_rate)}/hr${tutor.active ? "" : " · inactive"}</small></span></label>
-      <label><span>Subject / course</span><input data-assignment-subject maxlength="120" value="${escapeHtml(assignment?.subject || "")}" ${checked ? "" : "disabled"}></label>
-      <label><span>Client charge override</span><input data-assignment-client-rate type="number" min="0" step="0.01" placeholder="Student default" value="${assignment?.client_hourly_rate ?? ""}" ${checked ? "" : "disabled"}></label>
-      <label><span>Tutor pay override</span><input data-assignment-tutor-rate type="number" min="0" step="0.01" placeholder="Tutor default" value="${assignment?.tutor_hourly_rate ?? ""}" ${checked ? "" : "disabled"}></label>
-    </div>`;
-  }).join("");
-  container.querySelectorAll("[data-assignment-enabled]").forEach((checkbox) => {
-    checkbox.addEventListener("change", () => {
-      checkbox.closest("[data-assignment-row]").querySelectorAll("input:not([data-assignment-enabled])")
-        .forEach((input) => { input.disabled = !checkbox.checked; });
+  container.innerHTML = `
+    <div class="assignment-toolbar">
+      <div><strong>Assigned tutors</strong><small>Add only the tutors who work with this student.</small></div>
+      <button class="dark-ghost" type="button" data-add-assignment>+ Add tutor</button>
+    </div>
+    <div class="assignment-empty" data-assignment-empty>No tutors assigned yet.</div>
+    <div class="assignment-list" data-assignment-list></div>`;
+  const list = container.querySelector("[data-assignment-list]");
+  const addRow = (assignment = {}) => {
+    const preferredTutorId = Number(assignment.tutor_id || 0);
+    const firstAvailable = tutors.find((tutor) => tutor.active && ![...list.querySelectorAll("[data-assignment-tutor]")]
+      .some((select) => Number(select.value) === Number(tutor.user_id))) || tutors.find((tutor) => tutor.active);
+    const tutorId = preferredTutorId || Number(firstAvailable?.user_id || 0);
+    if (!tutorId) return;
+    const row = document.createElement("div");
+    row.className = "tutor-assignment-row";
+    row.dataset.assignmentRow = "";
+    row.innerHTML = `
+      <div class="assignment-row-head">
+        <label><span>Tutor</span><select data-assignment-tutor required>${tutors.map((tutor) => `<option value="${tutor.user_id}" ${tutor.active ? "" : "disabled"}>${escapeHtml(tutor.name)}${tutor.active ? "" : " (Inactive)"}</option>`).join("")}</select></label>
+        <span class="assignment-default-rate" data-assignment-default-rate></span>
+        <button class="assignment-remove dark-ghost" type="button" data-remove-assignment aria-label="Remove tutor assignment">Remove</button>
+      </div>
+      <div class="assignment-fields">
+        <label><span>Subject / course</span><input data-assignment-subject maxlength="120" placeholder="e.g. Maths" value="${escapeHtml(assignment.subject || "")}"></label>
+        <label><span>Client charge override</span><input data-assignment-client-rate type="number" min="0" step="0.01" placeholder="Use student rate" value="${assignment.client_hourly_rate ?? ""}"></label>
+        <label><span>Tutor pay override</span><input data-assignment-tutor-rate type="number" min="0" step="0.01" placeholder="Use tutor default" value="${assignment.tutor_hourly_rate ?? ""}"></label>
+      </div>`;
+    list.appendChild(row);
+    row.querySelector("[data-assignment-tutor]").value = String(tutorId);
+    row.querySelector("[data-assignment-tutor]").addEventListener("change", () => refreshAssignmentEditor(container));
+    row.querySelector("[data-remove-assignment]").addEventListener("click", () => {
+      row.remove();
+      refreshAssignmentEditor(container);
     });
+    refreshAssignmentEditor(container);
+  };
+  selectedAssignments.filter((item) => item.active !== false).forEach(addRow);
+  container.querySelector("[data-add-assignment]").addEventListener("click", () => addRow());
+  refreshAssignmentEditor(container);
+}
+
+function refreshAssignmentEditor(container) {
+  const rows = [...container.querySelectorAll("[data-assignment-row]")];
+  const selectedIds = rows.map((row) => Number(row.querySelector("[data-assignment-tutor]").value));
+  rows.forEach((row) => {
+    const select = row.querySelector("[data-assignment-tutor]");
+    [...select.options].forEach((option) => {
+      option.disabled = (!tutors.find((tutor) => Number(tutor.user_id) === Number(option.value))?.active)
+        || (Number(option.value) !== Number(select.value) && selectedIds.includes(Number(option.value)));
+    });
+    const tutor = tutors.find((item) => Number(item.user_id) === Number(select.value));
+    row.querySelector("[data-assignment-default-rate]").textContent = tutor ? `Default pay ${money(tutor.hourly_rate)}/hr` : "";
   });
+  container.querySelector("[data-assignment-empty]").hidden = rows.length > 0;
+  container.querySelector("[data-add-assignment]").disabled = selectedIds.length >= tutors.filter((tutor) => tutor.active).length;
 }
 
 function collectTutorAssignments(container) {
   if (personalWorkspace || !container) return [];
   return [...container.querySelectorAll("[data-assignment-row]")]
-    .filter((row) => row.querySelector("[data-assignment-enabled]").checked)
     .map((row) => ({
-      tutor_id: Number(row.dataset.tutorId),
+      tutor_id: Number(row.querySelector("[data-assignment-tutor]").value),
       subject: row.querySelector("[data-assignment-subject]").value,
       client_hourly_rate: row.querySelector("[data-assignment-client-rate]").value,
       tutor_hourly_rate: row.querySelector("[data-assignment-tutor-rate]").value,

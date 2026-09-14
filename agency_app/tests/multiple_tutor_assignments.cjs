@@ -48,15 +48,38 @@ const publicDir = path.resolve(__dirname, '../public');
 
     await page.goto('http://tutorflow.test/');
     await page.getByRole('button', { name: 'Students', exact: true }).click();
-    await page.waitForSelector('[data-assignment-row]');
+    await page.waitForSelector('#studentAssignments [data-add-assignment]');
+    assert.equal(await page.locator('#studentAssignments [data-assignment-row]').count(), 0);
+    await page.locator('#studentAssignments [data-add-assignment]').click();
+    assert.equal(await page.locator('#studentAssignments [data-assignment-row]').count(), 1);
+    await page.locator('#studentAssignments [data-add-assignment]').click();
     assert.equal(await page.locator('#studentAssignments [data-assignment-row]').count(), 2);
+    assert.equal(await page.locator('#studentAssignments [data-add-assignment]').isDisabled(), true);
     assert.match(await page.locator('#studentList').textContent(), /Maths Tutor/);
     assert.match(await page.locator('#studentList').textContent(), /English Tutor/);
     assert.match(await page.locator('#studentList').textContent(), /Maths/);
     assert.match(await page.locator('#studentList').textContent(), /English/);
+    for (const width of [1024, 1280, 1440]) {
+      await page.setViewportSize({ width, height: 1000 });
+      const layout = await page.evaluate(() => {
+        const panel = document.querySelector('.student-directory-panel').getBoundingClientRect();
+        const wrap = document.querySelector('#studentList .table-wrap');
+        return {
+          pageWidth: document.documentElement.clientWidth,
+          pageScrollWidth: document.documentElement.scrollWidth,
+          panelRight: panel.right,
+          wrapWidth: wrap.clientWidth,
+          wrapScrollWidth: wrap.scrollWidth,
+        };
+      });
+      assert.ok(layout.pageScrollWidth <= layout.pageWidth + 1, `${width}: student page overflows`);
+      assert.ok(layout.panelRight <= layout.pageWidth + 1, `${width}: directory is clipped on the right`);
+      assert.ok(layout.wrapScrollWidth <= layout.wrapWidth + 1, `${width}: directory requires horizontal scrolling`);
+    }
 
     await page.locator('[data-edit-student="10"]').click();
-    assert.equal(await page.locator('#studentEditAssignments [data-assignment-enabled]:checked').count(), 2);
+    assert.equal(await page.locator('#studentEditAssignments [data-assignment-row]').count(), 2);
+    assert.deepEqual(await page.locator('#studentEditAssignments [data-assignment-tutor]').evaluateAll(selects => selects.map(select => select.value)), ['2', '3']);
     await page.locator('#closeStudentEditX').click();
 
     await page.getByRole('button', { name: 'Calendar', exact: true }).click();
