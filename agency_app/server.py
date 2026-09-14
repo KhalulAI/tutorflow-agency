@@ -1359,10 +1359,17 @@ class Handler(SimpleHTTPRequestHandler):
                 if user["role"] == "Master"
                 else "COALESCE(lr.tutor_hourly_rate, s.tutor_hourly_rate, u.hourly_rate) AS tutor_rate"
             )
+            lesson_record_columns = (
+                "lr.*" if user["role"] == "Master"
+                else "lr.lesson_record_id, lr.booking_id, lr.student_id, lr.tutor_id, "
+                     "lr.completed_at, lr.attendance_status, lr.parent_summary, "
+                     "lr.emailed_to_parent, lr.timesheet_submitted, lr.timesheet_status, "
+                     "lr.created_at, lr.updated_at"
+            )
             with db() as conn:
                 lessons = rows(conn.execute(
                     f"""
-                    SELECT lr.*, b.start_at, COALESCE(lr.duration_minutes, b.duration_minutes) AS duration_minutes,
+                    SELECT {lesson_record_columns}, b.start_at, COALESCE(lr.duration_minutes, b.duration_minutes) AS duration_minutes,
                            s.student_name, s.parent_email,
                            {rate_columns}, u.name AS tutor_name
                     FROM lesson_records lr
@@ -1395,6 +1402,13 @@ class Handler(SimpleHTTPRequestHandler):
                 "COALESCE(b.start_at, lr.completed_at), LOWER(s.student_name), lr.lesson_record_id"
             )
             tutor_id = user["user_id"] if user["role"] != "Master" or PERSONAL_WORKSPACE else int(query.get("tutor_id", [user["user_id"]])[0] or user["user_id"])
+            lesson_record_columns = (
+                "lr.*" if user["role"] == "Master"
+                else "lr.lesson_record_id, lr.booking_id, lr.student_id, lr.tutor_id, "
+                     "lr.completed_at, lr.attendance_status, lr.parent_summary, "
+                     "lr.emailed_to_parent, lr.timesheet_submitted, lr.timesheet_status, "
+                     "lr.created_at, lr.updated_at"
+            )
             with db() as conn:
                 tutor_record = conn.execute(
                     "SELECT user_id, name, email, hourly_rate FROM users WHERE user_id = ?",
@@ -1408,7 +1422,7 @@ class Handler(SimpleHTTPRequestHandler):
                 )
                 lessons = rows(conn.execute(
                     f"""
-                    SELECT lr.*, b.start_at, COALESCE(lr.duration_minutes, b.duration_minutes) AS duration_minutes,
+                    SELECT {lesson_record_columns}, b.start_at, COALESCE(lr.duration_minutes, b.duration_minutes) AS duration_minutes,
                            s.student_name, {rate_expression} AS tutor_rate,
                            u.name AS tutor_name
                     FROM lesson_records lr

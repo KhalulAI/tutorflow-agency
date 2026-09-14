@@ -540,6 +540,7 @@ class AgencyApiTests(unittest.TestCase):
         )
         self.assertEqual(timesheet["lessons"][0]["tutor_rate"], 50)
         self.assertNotIn("student_rate", timesheet["lessons"][0])
+        self.assertNotIn("client_hourly_rate", timesheet["lessons"][0])
         pdf_request = Request(
             self.base_url + f"/api/timesheet?month={start_at[:7]}&format=pdf",
             method="GET",
@@ -557,6 +558,7 @@ class AgencyApiTests(unittest.TestCase):
         )
         self.assertEqual(tutor_report["lessons"][0]["tutor_rate"], 50)
         self.assertNotIn("student_rate", tutor_report["lessons"][0])
+        self.assertNotIn("client_hourly_rate", tutor_report["lessons"][0])
 
         _, master_report = self.api(f"/api/reports/lessons?month={start_at[:7]}")
         self.assertEqual(master_report["lessons"][0]["student_rate"], 80)
@@ -699,6 +701,12 @@ class AgencyApiTests(unittest.TestCase):
                 _, tutor_bookings = self.api(f"/api/bookings?month={month}", opener=tutor_opener)
                 self.assertEqual(len(tutor_bookings["bookings"]), 1)
                 self.assertNotIn("client_hourly_rate", tutor_bookings["bookings"][0])
+                _, tutor_timesheet = self.api(f"/api/timesheet?month={month}", opener=tutor_opener)
+                self.assertEqual(len(tutor_timesheet["lessons"]), 1)
+                self.assertNotIn("client_hourly_rate", tutor_timesheet["lessons"][0])
+                _, tutor_reports = self.api(f"/api/reports/lessons?month={month}", opener=tutor_opener)
+                self.assertEqual(len(tutor_reports["lessons"]), 1)
+                self.assertNotIn("client_hourly_rate", tutor_reports["lessons"][0])
 
     def test_student_can_be_unassigned_archived_or_permanently_deleted(self):
         self.login_as_master()
