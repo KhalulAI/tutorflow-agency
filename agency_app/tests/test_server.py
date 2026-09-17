@@ -708,6 +708,161 @@ class AgencyApiTests(unittest.TestCase):
                 self.assertEqual(len(tutor_reports["lessons"]), 1)
                 self.assertNotIn("client_hourly_rate", tutor_reports["lessons"][0])
 
+    def test_known_duplicate_students_merge_without_losing_history_or_tutor_privacy(self):
+        self.login_as_master()
+        server.send_tutor_credentials_email = lambda *_args, **_kwargs: "message-id"
+        credentials = {}
+        for name, email, default_rate in (
+            ("Lucas Tutor One", "lucas-one@example.com", 31),
+            ("Lucas Tutor Two", "lucas-two@example.com", 32),
+            ("Alexander Tutor One", "alexander-one@example.com", 33),
+            ("Alexander Tutor Two", "alexander-two@example.com", 34),
+        ):
+            _, created = self.api(
+                "/api/users", "POST", {"name": name, "email": email, "hourly_rate": default_rate}
+            )
+            credentials[email] = created["temporary_password"]
+        _, users_data = self.api("/api/users")
+        tutors = {item["email"]: item for item in users_data["users"] if item["role"] == "Tutor"}
+
+        profile_specs = (
+            ("Lucas Assaf", "Lucas Parent", "lucas.one@parent.example", "Year 9", "Maths notes",
+             "lucas-one@example.com", "Maths", 81, 41, "18", "Lucas maths note"),
+            ("  lucas   assaf ", "Second Parent", "lucas.two@parent.example", "Year 9", "English notes",
+             "lucas-two@example.com", "English", 92, 52, "19", "Lucas English note"),
+            ("Alexander Baker", "Alexander Parent", "alex.one@parent.example", "Year 10", "Physics notes",
+             "alexander-one@example.com", "Physics", 83, 43, "20", "Alexander physics note"),
+            ("Alexander Baker", "Other Parent", "alex.two@parent.example", "Year 10", "Chemistry notes",
+             "alexander-two@example.com", "Chemistry", 94, 54, "21", "Alexander chemistry note"),
+        )
+        month = datetime.now().strftime("%Y-%m")
+        original_booking_ids = []
+        original_lesson_ids = []
+        for (
+            student_name, parent_name, parent_email, year_group, target_school,
+            tutor_email, subject, client_rate, tutor_rate, day, note,
+        ) in profile_specs:
+            tutor = tutors[tutor_email]
+            _, created_student = self.api(
+                "/api/students",
+                "POST",
+                {
+                    "student_name": student_name,
+                    "parent_name": parent_name,
+                    "parent_email": parent_email,
+                    "year_group": year_group,
+                    "target_school": target_school,
+                    "hourly_rate": client_rate,
+                    "tutor_assignments": [{
+                        "tutor_id": tutor["user_id"],
+                        "subject": subject,
+                        "client_hourly_rate": client_rate,
+                        "tutor_hourly_rate": tutor_rate,
+                    }],
+                },
+            )
+            self.api(
+                "/api/bookings",
+                "POST",
+                {
+                    "student_id": created_student["student_id"],
+                    "tutor_id": tutor["user_id"],
+                    "start_at": f"{month}-{day}T16:00:00",
+                    "duration_minutes": 45 if "two@" in tutor_email else 60,
+                    "notes": f"Private booking for {tutor_email}",
+                },
+            )
+            _, booking_data = self.api(f"/api/bookings?month={month}")
+            booking = next(
+                item for item in booking_data["bookings"]
+                if item["student_id"] == created_student["student_id"]
+            )
+            original_booking_ids.append(booking["booking_id"])
+            self.api(
+                f"/api/bookings/{booking['booking_id']}/complete",
+                "POST",
+                {"parent_summary": note, "emailed_to_parent": False},
+            )
+            with server.db() as connection:
+                lesson = connection.execute(
+                    "SELECT lesson_record_id FROM lesson_records WHERE booking_id = ?",
+                    (booking["booking_id"],),
+                ).fetchone()
+            original_lesson_ids.append(lesson["lesson_record_id"])
+
+        with server.db() as connection:
+            merges = server.merge_legacy_duplicate_students(connection)
+        self.assertEqual({item["student_name"].strip() for item in merges}, {"Lucas Assaf", "Alexander Baker"})
+
+        with server.db() as connection:
+            merged_students = server.rows(connection.execute(
+                "SELECT * FROM students WHERE LOWER(TRIM(student_name)) IN ('lucas assaf', 'alexander baker')"
+            ))
+            self.assertEqual(len(merged_students), 2)
+            merged_by_name = {
+                " ".join(item["student_name"].split()).casefold(): item for item in merged_students
+            }
+            lucas = merged_by_name["lucas assaf"]
+            alexander = merged_by_name["alexander baker"]
+            self.assertEqual(lucas["parent_email"], "lucas.one@parent.example, lucas.two@parent.example")
+            self.assertIn("Maths notes", lucas["target_school"])
+            self.assertIn("English notes", lucas["target_school"])
+
+            assignments = server.rows(connection.execute(
+                """
+                SELECT student_id, tutor_id, subject, client_hourly_rate, tutor_hourly_rate
+                FROM student_tutor_assignments
+                WHERE student_id IN (?, ?)
+                """,
+                (lucas["student_id"], alexander["student_id"]),
+            ))
+            assignment_rates = {
+                item["tutor_id"]: (item["client_hourly_rate"], item["tutor_hourly_rate"])
+                for item in assignments
+            }
+            self.assertEqual(assignment_rates[tutors["lucas-one@example.com"]["user_id"]], (81, 41))
+            self.assertEqual(assignment_rates[tutors["lucas-two@example.com"]["user_id"]], (92, 52))
+            self.assertEqual(assignment_rates[tutors["alexander-one@example.com"]["user_id"]], (83, 43))
+            self.assertEqual(assignment_rates[tutors["alexander-two@example.com"]["user_id"]], (94, 54))
+
+            bookings = server.rows(connection.execute(
+                "SELECT booking_id, student_id, notes, client_hourly_rate, tutor_hourly_rate FROM bookings"
+            ))
+            lessons = server.rows(connection.execute(
+                "SELECT lesson_record_id, student_id, parent_summary FROM lesson_records"
+            ))
+            self.assertEqual({item["booking_id"] for item in bookings}, set(original_booking_ids))
+            self.assertEqual({item["lesson_record_id"] for item in lessons}, set(original_lesson_ids))
+            self.assertEqual(
+                {item["parent_summary"] for item in lessons},
+                {"Lucas maths note", "Lucas English note", "Alexander physics note", "Alexander chemistry note"},
+            )
+            self.assertTrue(all(item["student_id"] in {lucas["student_id"], alexander["student_id"]} for item in bookings))
+            self.assertEqual(connection.execute("SELECT COUNT(*) AS count FROM student_merge_audit").fetchone()["count"], 2)
+
+        with server.db() as connection:
+            self.assertEqual(server.merge_legacy_duplicate_students(connection), [])
+
+        for email, expected_note, hidden_note, expected_rate in (
+            ("lucas-one@example.com", "Lucas maths note", "Lucas English note", 41),
+            ("lucas-two@example.com", "Lucas English note", "Lucas maths note", 52),
+            ("alexander-one@example.com", "Alexander physics note", "Alexander chemistry note", 43),
+            ("alexander-two@example.com", "Alexander chemistry note", "Alexander physics note", 54),
+        ):
+            tutor_opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+            self.api(
+                "/api/login", "POST", {"email": email, "password": credentials[email]}, opener=tutor_opener
+            )
+            _, visible_students = self.api("/api/students", opener=tutor_opener)
+            self.assertEqual(len(visible_students["students"]), 1)
+            self.assertEqual(visible_students["students"][0]["tutor_rate"], expected_rate)
+            self.assertNotIn("assignments", visible_students["students"][0])
+            _, visible_bookings = self.api(f"/api/bookings?month={month}", opener=tutor_opener)
+            self.assertEqual(len(visible_bookings["bookings"]), 1)
+            self.assertEqual(visible_bookings["bookings"][0]["parent_summary"], expected_note)
+            self.assertNotEqual(visible_bookings["bookings"][0]["parent_summary"], hidden_note)
+            self.assertNotIn("client_hourly_rate", visible_bookings["bookings"][0])
+
     def test_student_can_be_unassigned_archived_or_permanently_deleted(self):
         self.login_as_master()
         _, created = self.api(

@@ -242,6 +242,261 @@ def validate_tutor_document(filename: str, content_type: str, content: bytes) ->
     return filename, content_type
 
 
+LEGACY_DUPLICATE_STUDENT_NAMES = ("Lucas Assaf", "Alexander Baker")
+
+
+def _normalised_person_name(value: str) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _merge_distinct_values(values, separator: str = " | ") -> str:
+    merged = []
+    seen = set()
+    for value in values:
+        cleaned = str(value or "").strip()
+        key = cleaned.casefold()
+        if cleaned and key not in seen:
+            seen.add(key)
+            merged.append(cleaned)
+    return separator.join(merged)
+
+
+def merge_legacy_duplicate_students(conn, student_names=LEGACY_DUPLICATE_STUDENT_NAMES):
+    """Consolidate the two known pre-multi-tutor duplicate student profiles.
+
+    The operation is deliberately narrow and idempotent. Before a duplicate profile is
+    removed, its full profile and assignments are stored in student_merge_audit. Lesson
+    and booking IDs are retained, and their historical rates are snapshotted before the
+    student foreign key is changed.
+    """
+    target_names = {_normalised_person_name(name) for name in student_names}
+    all_students = rows(conn.execute("SELECT * FROM students ORDER BY student_id"))
+    groups = {}
+    for student in all_students:
+        normalised_name = _normalised_person_name(student["student_name"])
+        if normalised_name in target_names:
+            groups.setdefault(normalised_name, []).append(student)
+
+    completed_merges = []
+    for duplicate_group in groups.values():
+        if len(duplicate_group) < 2:
+            continue
+        duplicate_group.sort(key=lambda item: (-int(item["active"] or 0), int(item["student_id"])))
+        survivor = duplicate_group[0]
+        sources = duplicate_group[1:]
+        group_ids = [int(item["student_id"]) for item in duplicate_group]
+
+        assignments_by_profile = {}
+        combined_assignments = {}
+        for profile in duplicate_group:
+            profile_id = int(profile["student_id"])
+            profile_assignments = rows(conn.execute(
+                """
+                SELECT sta.*, u.hourly_rate AS tutor_default_rate
+                FROM student_tutor_assignments sta
+                JOIN users u ON u.user_id = sta.tutor_id
+                WHERE sta.student_id = ?
+                ORDER BY sta.active DESC, sta.created_at, sta.tutor_id
+                """,
+                (profile_id,),
+            ))
+            assignments_by_profile[profile_id] = {}
+            for assignment in profile_assignments:
+                tutor_id = int(assignment["tutor_id"])
+                client_rate = (
+                    assignment["client_hourly_rate"]
+                    if assignment["client_hourly_rate"] is not None
+                    else profile["hourly_rate"]
+                )
+                legacy_tutor_rate = (
+                    profile["tutor_hourly_rate"]
+                    if tutor_id == profile["assigned_tutor_id"] else None
+                )
+                tutor_rate = (
+                    assignment["tutor_hourly_rate"]
+                    if assignment["tutor_hourly_rate"] is not None
+                    else legacy_tutor_rate
+                    if legacy_tutor_rate is not None
+                    else assignment["tutor_default_rate"]
+                )
+                effective = {
+                    "tutor_id": tutor_id,
+                    "subject": assignment["subject"] or "",
+                    "client_hourly_rate": float(client_rate or 0),
+                    "tutor_hourly_rate": float(tutor_rate or 0),
+                    "active": int(assignment["active"] or 0),
+                    "created_at": assignment["created_at"] or profile["created_at"],
+                }
+                assignments_by_profile[profile_id][tutor_id] = effective
+                # The survivor wins an unexpected same-tutor conflict; missing metadata
+                # is filled from the duplicate without exposing either tutor to the other.
+                if tutor_id not in combined_assignments:
+                    combined_assignments[tutor_id] = effective
+                else:
+                    existing = combined_assignments[tutor_id]
+                    if not existing["subject"] and effective["subject"]:
+                        existing["subject"] = effective["subject"]
+                    existing["active"] = max(existing["active"], effective["active"])
+
+        booking_snapshots = {}
+        for profile in duplicate_group:
+            profile_id = int(profile["student_id"])
+            for booking in rows(conn.execute("SELECT * FROM bookings WHERE student_id = ?", (profile_id,))):
+                tutor_id = int(booking["tutor_id"])
+                assignment = assignments_by_profile[profile_id].get(tutor_id)
+                client_rate = booking["client_hourly_rate"]
+                if client_rate is None:
+                    client_rate = assignment["client_hourly_rate"] if assignment else profile["hourly_rate"]
+                tutor_rate = booking["tutor_hourly_rate"]
+                if tutor_rate is None:
+                    if assignment:
+                        tutor_rate = assignment["tutor_hourly_rate"]
+                    elif tutor_id == profile["assigned_tutor_id"] and profile["tutor_hourly_rate"] is not None:
+                        tutor_rate = profile["tutor_hourly_rate"]
+                    else:
+                        tutor = conn.execute("SELECT hourly_rate FROM users WHERE user_id = ?", (tutor_id,)).fetchone()
+                        tutor_rate = tutor["hourly_rate"] if tutor else 0
+                subject = booking["assignment_subject"] or (assignment["subject"] if assignment else "")
+                booking_snapshots[int(booking["booking_id"])] = {
+                    "duration_minutes": int(booking["duration_minutes"] or 0),
+                    "client_hourly_rate": float(client_rate or 0),
+                    "tutor_hourly_rate": float(tutor_rate or 0),
+                }
+                conn.execute(
+                    """
+                    UPDATE bookings
+                    SET client_hourly_rate = ?, tutor_hourly_rate = ?, assignment_subject = ?
+                    WHERE booking_id = ?
+                    """,
+                    (client_rate, tutor_rate, subject, booking["booking_id"]),
+                )
+
+            for lesson in rows(conn.execute("SELECT * FROM lesson_records WHERE student_id = ?", (profile_id,))):
+                tutor_id = int(lesson["tutor_id"])
+                assignment = assignments_by_profile[profile_id].get(tutor_id)
+                booking = booking_snapshots.get(int(lesson["booking_id"])) if lesson["booking_id"] else None
+                duration = lesson["duration_minutes"]
+                if duration is None and booking:
+                    duration = booking["duration_minutes"]
+                client_rate = lesson["client_hourly_rate"]
+                if client_rate is None:
+                    client_rate = booking["client_hourly_rate"] if booking else (
+                        assignment["client_hourly_rate"] if assignment else profile["hourly_rate"]
+                    )
+                tutor_rate = lesson["tutor_hourly_rate"]
+                if tutor_rate is None:
+                    tutor_rate = booking["tutor_hourly_rate"] if booking else (
+                        assignment["tutor_hourly_rate"] if assignment else profile["tutor_hourly_rate"] or 0
+                    )
+                conn.execute(
+                    """
+                    UPDATE lesson_records
+                    SET duration_minutes = ?, client_hourly_rate = ?, tutor_hourly_rate = ?
+                    WHERE lesson_record_id = ?
+                    """,
+                    (duration, client_rate, tutor_rate, lesson["lesson_record_id"]),
+                )
+
+        survivor_id = int(survivor["student_id"])
+        for assignment in combined_assignments.values():
+            existing = conn.execute(
+                "SELECT 1 FROM student_tutor_assignments WHERE student_id = ? AND tutor_id = ?",
+                (survivor_id, assignment["tutor_id"]),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """
+                    UPDATE student_tutor_assignments
+                    SET subject = ?, client_hourly_rate = ?, tutor_hourly_rate = ?, active = ?
+                    WHERE student_id = ? AND tutor_id = ?
+                    """,
+                    (
+                        assignment["subject"], assignment["client_hourly_rate"],
+                        assignment["tutor_hourly_rate"], assignment["active"],
+                        survivor_id, assignment["tutor_id"],
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO student_tutor_assignments
+                      (student_id, tutor_id, subject, client_hourly_rate, tutor_hourly_rate, active, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        survivor_id, assignment["tutor_id"], assignment["subject"],
+                        assignment["client_hourly_rate"], assignment["tutor_hourly_rate"],
+                        assignment["active"], assignment["created_at"],
+                    ),
+                )
+
+        parent_emails = []
+        email_keys = set()
+        for profile in duplicate_group:
+            for raw_email in re.split(r"[,;\n]+", str(profile["parent_email"] or "")):
+                email = raw_email.strip().lower()
+                if email and email not in email_keys:
+                    email_keys.add(email)
+                    parent_emails.append(email)
+        primary_assignment = next(
+            (item for item in combined_assignments.values() if item["active"]),
+            next(iter(combined_assignments.values()), None),
+        )
+        conn.execute(
+            """
+            UPDATE students
+            SET parent_name = ?, parent_email = ?, year_group = ?, target_school = ?,
+                assigned_tutor_id = ?, tutor_hourly_rate = ?, active = ?, created_at = ?
+            WHERE student_id = ?
+            """,
+            (
+                _merge_distinct_values(profile["parent_name"] for profile in duplicate_group),
+                ", ".join(parent_emails),
+                _merge_distinct_values(profile["year_group"] for profile in duplicate_group),
+                _merge_distinct_values(profile["target_school"] for profile in duplicate_group),
+                primary_assignment["tutor_id"] if primary_assignment else None,
+                primary_assignment["tutor_hourly_rate"] if primary_assignment else None,
+                max(int(profile["active"] or 0) for profile in duplicate_group),
+                min(profile["created_at"] for profile in duplicate_group),
+                survivor_id,
+            ),
+        )
+
+        for source in sources:
+            source_id = int(source["student_id"])
+            source_audit = {
+                "student": source,
+                "assignments": list(assignments_by_profile[source_id].values()),
+                "booking_ids": [
+                    item["booking_id"]
+                    for item in conn.execute("SELECT booking_id FROM bookings WHERE student_id = ?", (source_id,))
+                ],
+                "lesson_record_ids": [
+                    item["lesson_record_id"]
+                    for item in conn.execute("SELECT lesson_record_id FROM lesson_records WHERE student_id = ?", (source_id,))
+                ],
+            }
+            conn.execute(
+                """
+                INSERT INTO student_merge_audit
+                  (source_student_id, survivor_student_id, student_name, source_profile_json, merged_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (source_id, survivor_id, source["student_name"], json.dumps(source_audit), now_iso()),
+            )
+            conn.execute("UPDATE bookings SET student_id = ? WHERE student_id = ?", (survivor_id, source_id))
+            conn.execute("UPDATE lesson_records SET student_id = ? WHERE student_id = ?", (survivor_id, source_id))
+            conn.execute("DELETE FROM students WHERE student_id = ?", (source_id,))
+
+        completed_merges.append({
+            "student_name": survivor["student_name"],
+            "survivor_student_id": survivor_id,
+            "source_student_ids": [int(item["student_id"]) for item in sources],
+            "profile_ids": group_ids,
+        })
+    return completed_merges
+
+
 def init_db() -> None:
     primary_key = "SERIAL PRIMARY KEY" if DATABASE_URL else "INTEGER PRIMARY KEY AUTOINCREMENT"
     binary_type = "BYTEA" if DATABASE_URL else "BLOB"
@@ -371,6 +626,15 @@ def init_db() -> None:
                 locked_at TEXT NOT NULL,
                 FOREIGN KEY(locked_by) REFERENCES users(user_id) ON DELETE SET NULL
             );
+
+            CREATE TABLE IF NOT EXISTS student_merge_audit (
+                merge_id {primary_key},
+                source_student_id INTEGER NOT NULL UNIQUE,
+                survivor_student_id INTEGER NOT NULL,
+                student_name TEXT NOT NULL,
+                source_profile_json TEXT NOT NULL,
+                merged_at TEXT NOT NULL
+            );
             """
         )
         ensure_column(conn, "lesson_records", "timesheet_status", "TEXT NOT NULL DEFAULT 'Draft'")
@@ -416,6 +680,8 @@ def init_db() -> None:
             WHERE tutor_hourly_rate IS NULL
             """
         )
+        if not PERSONAL_WORKSPACE:
+            merge_legacy_duplicate_students(conn)
 
 
 def optional_nonnegative_rate(value, label: str):
@@ -1523,7 +1789,10 @@ class Handler(SimpleHTTPRequestHandler):
                 if not DATABASE_URL and DB_PATH.exists():
                     archive.write(DB_PATH, "agency.sqlite3")
                 with db() as conn:
-                    for table in ("users", "students", "student_tutor_assignments", "bookings", "lesson_records", "expenses", "month_locks"):
+                    for table in (
+                        "users", "students", "student_tutor_assignments", "bookings", "lesson_records",
+                        "expenses", "month_locks", "student_merge_audit",
+                    ):
                         archive.writestr(
                             f"{table}.json",
                             json.dumps(rows(conn.execute(f"SELECT * FROM {table}")), indent=2),
