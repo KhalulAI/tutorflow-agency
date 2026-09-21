@@ -1212,14 +1212,23 @@ async function loadHome() {
   const monthBookings = data.bookings;
   const lessonData = await api(`/api/reports/lessons?month=${encodeURIComponent(els.homeMonth.value)}`);
   const done = lessonData.lessons;
+  const financeData = personalWorkspace
+    ? await api(`/api/finance/summary?period=month&anchor=${encodeURIComponent(`${els.homeMonth.value}-01`)}`)
+    : null;
   const now = new Date();
   const incomplete = monthBookings.filter((booking) => booking.status !== "Completed" && new Date(booking.start_at) < now);
   const upcoming = monthBookings.filter((booking) => new Date(booking.start_at) >= now).slice(0, 8);
-  els.homeStats.innerHTML = `
+  const coreStats = `
     <article class="stat"><span class="eyebrow">Booked</span><strong>${monthBookings.length}</strong><small>This month</small></article>
     <article class="stat"><span class="eyebrow">Completed</span><strong>${done.length}</strong><small>Recorded lessons</small></article>
+  `;
+  els.homeStats.innerHTML = personalWorkspace ? `${coreStats}
+    <article class="stat"><span class="eyebrow">Income Earned</span><strong>${money(financeData.summary.gross_income)}</strong><small>Completed lessons this month</small></article>
+    <article class="stat"><span class="eyebrow">Projected Income</span><strong>${money(financeData.projection.gross_income)}</strong><small>Completed plus ${financeData.projection.remaining_booked_count} still booked</small></article>
     <article class="stat"><span class="eyebrow">Need Notes</span><strong>${incomplete.length}</strong><small>Past lessons incomplete</small></article>
-    ${personalWorkspace ? `<article class="stat"><span class="eyebrow">Income</span><strong>${money(done.reduce((sum, lesson) => sum + Number(lesson.student_rate || 0) * Number(lesson.duration_minutes || 0) / 60, 0))}</strong><small>Completed lessons this month</small></article>` : `<article class="stat"><span class="eyebrow">Tutors</span><strong>${tutors.length}</strong><small>Tutor accounts</small></article>`}
+  ` : `${coreStats}
+    <article class="stat"><span class="eyebrow">Need Notes</span><strong>${incomplete.length}</strong><small>Past lessons incomplete</small></article>
+    <article class="stat"><span class="eyebrow">Tutors</span><strong>${tutors.length}</strong><small>Tutor accounts</small></article>
   `;
   els.upcomingList.innerHTML = upcoming.length ? upcoming.map((booking) => bookingItem(booking, false)).join("") : `<div class="notice">No upcoming lessons this month.</div>`;
   els.completionList.innerHTML = incomplete.length ? incomplete.map((booking) => bookingItem(booking, true)).join("") : `<div class="notice">No overdue lesson notes.</div>`;
@@ -1413,15 +1422,20 @@ async function loadFinance() {
   if (currentUser.role !== "Master") return;
   const data = await api(`/api/finance/summary?${financeQuery()}`);
   const summary = data.summary;
+  const projection = data.projection;
   const vat = data.vat;
   els.financePeriodLabel.textContent = data.period_label;
   els.financeStats.innerHTML = personalWorkspace ? `
-    <article class="stat"><span class="eyebrow">Income</span><strong>${money(summary.gross_income)}</strong><small>${summary.lesson_count} completed lessons</small></article>
+    <article class="stat"><span class="eyebrow">Income Earned</span><strong>${money(summary.gross_income)}</strong><small>${summary.lesson_count} completed lessons</small></article>
+    <article class="stat"><span class="eyebrow">Projected Income</span><strong>${money(projection.gross_income)}</strong><small>Completed plus ${projection.remaining_booked_count} still booked</small></article>
     <article class="stat"><span class="eyebrow">Expenses</span><strong>${money(summary.expenses)}</strong><small>Saved in TutorFlow</small></article>
     <article class="stat"><span class="eyebrow">Net Income</span><strong>${money(summary.net_income)}</strong><small>Income less expenses</small></article>
   ` : `
     <article class="stat"><span class="eyebrow">Gross Income</span><strong>${money(summary.gross_income)}</strong><small>${summary.lesson_count} completed lessons</small></article>
+    <article class="stat"><span class="eyebrow">Projected Gross</span><strong>${money(projection.gross_income)}</strong><small>Completed plus ${projection.remaining_booked_count} still booked</small></article>
     <article class="stat"><span class="eyebrow">Tutor Costs</span><strong>${money(summary.tutor_costs)}</strong><small>Payable to tutors</small></article>
+    <article class="stat"><span class="eyebrow">Projected Tutor Costs</span><strong>${money(projection.tutor_costs)}</strong><small>For completed and booked lessons</small></article>
+    <article class="stat"><span class="eyebrow">Projected Net Commission</span><strong>${money(projection.gross_margin)}</strong><small>Projected gross less tutor costs</small></article>
     <article class="stat"><span class="eyebrow">Other Expenses</span><strong>${money(summary.expenses)}</strong><small>Saved in TutorFlow</small></article>
     <article class="stat"><span class="eyebrow">Net Income</span><strong>${money(summary.net_income)}</strong><small>Income less tutor costs and expenses</small></article>
   `;

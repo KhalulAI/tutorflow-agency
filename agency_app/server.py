@@ -985,6 +985,25 @@ def financial_lessons(conn, start_date: date, end_date: date):
     ))
 
 
+def projected_booked_lessons(conn, start_date: date, end_date: date):
+    """Return scheduled, unfinished lessons that contribute to the period forecast."""
+    return rows(conn.execute(
+        """
+        SELECT b.start_at,
+               COALESCE(b.duration_minutes, 0) AS duration_minutes,
+               COALESCE(b.client_hourly_rate, sta.client_hourly_rate, s.hourly_rate, 0) AS student_rate,
+               COALESCE(b.tutor_hourly_rate, sta.tutor_hourly_rate, s.tutor_hourly_rate, u.hourly_rate, 0) AS tutor_rate
+        FROM bookings b
+        JOIN students s ON s.student_id = b.student_id
+        JOIN users u ON u.user_id = b.tutor_id
+        LEFT JOIN student_tutor_assignments sta
+          ON sta.student_id = b.student_id AND sta.tutor_id = b.tutor_id
+        WHERE b.status = 'Booked' AND b.start_at >= ? AND b.start_at < ?
+        """,
+        (f"{start_date.isoformat()}T00:00:00", f"{end_date.isoformat()}T00:00:00"),
+    ))
+
+
 def period_expenses(conn, start_date: date, end_date: date):
     return rows(conn.execute(
         """
@@ -997,7 +1016,7 @@ def period_expenses(conn, start_date: date, end_date: date):
     ))
 
 
-def finance_csv(summary, expenses, period_label: str) -> str:
+def finance_csv(summary, projection, expenses, period_label: str) -> str:
     from io import StringIO
 
     output = StringIO()
@@ -1012,6 +1031,13 @@ def finance_csv(summary, expenses, period_label: str) -> str:
         writer.writerow(["Gross margin", summary["gross_margin"]])
     writer.writerow(["Other expenses", summary["expenses"]])
     writer.writerow(["Net income", summary["net_income"]])
+    writer.writerow([])
+    writer.writerow(["Projection based on completed and currently booked lessons"])
+    writer.writerow(["Projected gross income", projection["gross_income"]])
+    if not PERSONAL_WORKSPACE:
+        writer.writerow(["Projected tutor costs", projection["tutor_costs"]])
+        writer.writerow(["Projected net commission", projection["gross_margin"]])
+    writer.writerow(["Remaining booked lessons", projection["remaining_booked_count"]])
     writer.writerow([])
     writer.writerow(["Expense date", "Category", "Description", "Amount (GBP)"])
     for expense in expenses:
@@ -1727,7 +1753,12 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"error": str(error)}, 400)
             with db() as conn:
                 expenses = period_expenses(conn, start_date, end_date)
-                summary = calculate_finances(financial_lessons(conn, start_date, end_date), expenses)
+                completed_lessons = financial_lessons(conn, start_date, end_date)
+                remaining_bookings = projected_booked_lessons(conn, start_date, end_date)
+                summary = calculate_finances(completed_lessons, expenses)
+                projection = calculate_finances(completed_lessons + remaining_bookings, expenses)
+                projection["completed_lesson_count"] = len(completed_lessons)
+                projection["remaining_booked_count"] = len(remaining_bookings)
                 vat_start = rolling_year_start(anchor)
                 rolling_turnover = calculate_finances(
                     financial_lessons(conn, vat_start, anchor + timedelta(days=1)),
@@ -1758,11 +1789,12 @@ class Handler(SimpleHTTPRequestHandler):
             }
             if query.get("format", [""])[0].lower() == "csv":
                 filename = f"{BUSINESS_FILE_PREFIX}-finance-{period}-{anchor.isoformat()}.csv"
-                return self.send_csv(filename, finance_csv(summary, expenses, period_label))
+                return self.send_csv(filename, finance_csv(summary, projection, expenses, period_label))
             return self.send_json({
                 "period": period,
                 "period_label": period_label,
                 "summary": summary,
+                "projection": projection,
                 "expenses": expenses,
                 "vat": vat,
             })

@@ -321,6 +321,16 @@ class AgencyApiTests(unittest.TestCase):
             booking_id = result["bookings"][0]["booking_id"]
             self.api(f"/api/bookings/{booking_id}/complete", "POST",
                      {"attendance_status": "Completed", "parent_summary": "Personal lesson", "emailed_to_parent": False})
+            self.api(
+                "/api/bookings",
+                "POST",
+                {
+                    "student_id": student_id,
+                    "tutor_id": user["user_id"],
+                    "start_at": start_at.replace("-15T", "-16T"),
+                    "duration_minutes": 30,
+                },
+            )
             with server.db() as conn:
                 record = conn.execute("SELECT * FROM lesson_records WHERE booking_id = ?", (booking_id,)).fetchone()
             self.assertEqual(record["client_hourly_rate"], 100)
@@ -328,6 +338,9 @@ class AgencyApiTests(unittest.TestCase):
             _, result = self.api(f"/api/finance/summary?period=month&anchor={start_at[:10]}")
             self.assertEqual(result["summary"]["gross_income"], 100)
             self.assertEqual(result["summary"]["tutor_costs"], 0)
+            self.assertEqual(result["projection"]["gross_income"], 150)
+            self.assertEqual(result["projection"]["tutor_costs"], 0)
+            self.assertEqual(result["projection"]["remaining_booked_count"], 1)
             _, timesheet = self.api(f"/api/timesheet?month={start_at[:7]}&tutor_id=999999")
             self.assertEqual(len(timesheet["lessons"]), 1)
             self.assertEqual(timesheet["lessons"][0]["tutor_rate"], 100)
@@ -972,6 +985,16 @@ class AgencyApiTests(unittest.TestCase):
             },
         )
         self.api(
+            "/api/bookings",
+            "POST",
+            {
+                "student_id": student["student_id"],
+                "tutor_id": tutor["user_id"],
+                "start_at": start_at.replace("-19T", "-20T"),
+                "duration_minutes": 60,
+            },
+        )
+        self.api(
             "/api/expenses",
             "POST",
             {"expense_date": start_at[:10], "category": "Software", "description": "Monthly software", "amount": 10},
@@ -982,6 +1005,11 @@ class AgencyApiTests(unittest.TestCase):
         self.assertEqual(finance["summary"]["gross_margin"], 60)
         self.assertEqual(finance["summary"]["expenses"], 10)
         self.assertEqual(finance["summary"]["net_income"], 50)
+        self.assertEqual(finance["projection"]["gross_income"], 220)
+        self.assertEqual(finance["projection"]["tutor_costs"], 115)
+        self.assertEqual(finance["projection"]["gross_margin"], 105)
+        self.assertEqual(finance["projection"]["remaining_booked_count"], 1)
+        self.assertEqual(finance["projection"]["lesson_count"], 2)
         self.assertEqual(finance["vat"]["turnover"], 120)
         self.assertEqual(finance["vat"]["threshold"], 90000)
         self.assertEqual(len(finance["vat"]["series"]), 12)
@@ -994,6 +1022,9 @@ class AgencyApiTests(unittest.TestCase):
         self.assertIn("Gross income,120.0", finance_csv)
         self.assertIn("Tutor costs,60.0", finance_csv)
         self.assertIn("Net income,50.0", finance_csv)
+        self.assertIn("Projected gross income,220.0", finance_csv)
+        self.assertIn("Projected tutor costs,115.0", finance_csv)
+        self.assertIn("Projected net commission,105.0", finance_csv)
 
         expense_id = finance["expenses"][0]["expense_id"]
         self.api(f"/api/expenses/{expense_id}/delete", "POST", {})
@@ -1280,7 +1311,11 @@ class TimesheetPdfTests(unittest.TestCase):
             summary = server.calculate_finances([{"duration_minutes": 60, "student_rate": 100, "tutor_rate": 0}], [])
             self.assertEqual(summary["net_income"], 100)
             self.assertEqual(summary["tutor_costs"], 0)
-            self.assertIn("Scott Linger - Internal Finance Report", server.finance_csv(summary, [], "September"))
+            projection = {**summary, "remaining_booked_count": 0}
+            self.assertIn(
+                "Scott Linger - Internal Finance Report",
+                server.finance_csv(summary, projection, [], "September"),
+            )
 
     def test_pdf_is_branded_and_excludes_school_year(self):
         pdf = server.build_timesheet_pdf(
