@@ -494,6 +494,10 @@ body.tutor .student-table .pill { white-space: normal; }
   border-left-color: var(--green);
 }
 
+.calendar-forecast {
+  margin-top: -6px;
+}
+
 .stat {
   border-left: 4px solid var(--gold);
   background: var(--surface);

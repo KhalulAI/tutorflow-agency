@@ -69,6 +69,7 @@ const els = {
   calendarCurrentMonth: $("#calendarCurrentMonth"),
   calendarLockStatus: $("#calendarLockStatus"),
   calendarLockNotice: $("#calendarLockNotice"),
+  calendarProjection: $("#calendarProjection"),
   toggleMonthLock: $("#toggleMonthLock"),
   bookingForm: $("#bookingForm"),
   bookingStudent: $("#bookingStudent"),
@@ -913,9 +914,36 @@ async function removeStudent(event) {
 }
 
 async function loadCalendar() {
-  els.calendarMonthLabel.textContent = formatMonthLabel(els.calendarMonth.value);
-  const data = await api(`/api/bookings?month=${encodeURIComponent(els.calendarMonth.value)}`);
+  const selectedMonth = els.calendarMonth.value || currentMonth();
+  els.calendarMonthLabel.textContent = formatMonthLabel(selectedMonth);
+  const [data, financeData] = await Promise.all([
+    api(`/api/bookings?month=${encodeURIComponent(selectedMonth)}`),
+    currentUser.role === "Master"
+      ? api(`/api/finance/summary?period=month&anchor=${encodeURIComponent(`${selectedMonth}-01`)}`)
+      : Promise.resolve(null),
+  ]);
   bookings = data.bookings;
+  els.calendarProjection.hidden = !financeData;
+  if (financeData) {
+    const projection = financeData.projection;
+    els.calendarProjection.innerHTML = personalWorkspace ? `
+      <div class="stat-section-head">
+        <div><span class="eyebrow">${escapeHtml(formatMonthLabel(selectedMonth))} forecast</span><h3>Completed lessons + ${projection.remaining_booked_count} still booked</h3></div>
+      </div>
+      <div class="stat-grid">
+        <article class="stat"><span class="eyebrow">Projected Income</span><strong>${money(projection.gross_income)}</strong><small>Expected total if booked lessons go ahead</small></article>
+      </div>
+    ` : `
+      <div class="stat-section-head">
+        <div><span class="eyebrow">${escapeHtml(formatMonthLabel(selectedMonth))} forecast</span><h3>Completed lessons + ${projection.remaining_booked_count} still booked</h3></div>
+      </div>
+      <div class="stat-grid">
+        <article class="stat"><span class="eyebrow">Projected Gross</span><strong>${money(projection.gross_income)}</strong><small>Expected client charges</small></article>
+        <article class="stat"><span class="eyebrow">Projected Tutor Costs</span><strong>${money(projection.tutor_costs)}</strong><small>Expected tutor pay</small></article>
+        <article class="stat"><span class="eyebrow">Projected Commission</span><strong>${money(projection.gross_margin)}</strong><small>Projected gross less tutor costs</small></article>
+      </div>
+    `;
+  }
   calendarMonthLocked = Boolean(data.month_locked);
   els.calendarLockStatus.textContent = calendarMonthLocked ? "Locked for invoicing" : "Open for changes";
   els.calendarLockStatus.classList.toggle("locked", calendarMonthLocked);

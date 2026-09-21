@@ -128,15 +128,16 @@
             <span id="calendarLockStatus" class="pill">Open for changes</span>
             <button id="toggleMonthLock" class="master-only ghost dark-ghost" type="button">Lock Month for Invoicing</button>
             <div class="calendar-month-navigation" aria-label="Calendar month navigation">
-              <button id="calendarPreviousMonth" class="ghost dark-ghost personal-calendar-control" type="button" aria-label="Previous month">&larr; Previous</button>
+              <button id="calendarPreviousMonth" class="ghost dark-ghost" type="button" aria-label="Previous month">&larr; Previous</button>
               <input id="calendarMonth" type="month" aria-label="Calendar month">
               <strong id="calendarMonthLabel" class="personal-calendar-control calendar-month-label" aria-live="polite"></strong>
-              <button id="calendarNextMonth" class="ghost dark-ghost personal-calendar-control" type="button" aria-label="Next month">Next &rarr;</button>
-              <button id="calendarCurrentMonth" class="ghost dark-ghost personal-calendar-control" type="button">Today</button>
+              <button id="calendarNextMonth" class="ghost dark-ghost" type="button" aria-label="Next month">Next &rarr;</button>
+              <button id="calendarCurrentMonth" class="ghost dark-ghost" type="button">Today</button>
             </div>
           </div>
         </header>
         <div id="calendarLockNotice" class="notice" hidden></div>
+        <section id="calendarProjection" class="stat-section forecast-section calendar-forecast" aria-live="polite" hidden></section>
         <section class="calendar-workspace">
           <form id="bookingForm" class="panel booking-panel">
             <h3>Add Lesson</h3>
