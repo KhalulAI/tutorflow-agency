@@ -1212,7 +1212,7 @@ async function loadHome() {
   const monthBookings = data.bookings;
   const lessonData = await api(`/api/reports/lessons?month=${encodeURIComponent(els.homeMonth.value)}`);
   const done = lessonData.lessons;
-  const financeData = personalWorkspace
+  const financeData = currentUser.role === "Master"
     ? await api(`/api/finance/summary?period=month&anchor=${encodeURIComponent(`${els.homeMonth.value}-01`)}`)
     : null;
   const now = new Date();
@@ -1226,6 +1226,12 @@ async function loadHome() {
     <article class="stat"><span class="eyebrow">Income Earned</span><strong>${money(financeData.summary.gross_income)}</strong><small>Completed lessons this month</small></article>
     <article class="stat"><span class="eyebrow">Projected Income</span><strong>${money(financeData.projection.gross_income)}</strong><small>Completed plus ${financeData.projection.remaining_booked_count} still booked</small></article>
     <article class="stat"><span class="eyebrow">Need Notes</span><strong>${incomplete.length}</strong><small>Past lessons incomplete</small></article>
+  ` : financeData ? `${coreStats}
+    <article class="stat"><span class="eyebrow">Projected Gross</span><strong>${money(financeData.projection.gross_income)}</strong><small>Completed plus ${financeData.projection.remaining_booked_count} still booked</small></article>
+    <article class="stat"><span class="eyebrow">Projected Tutor Costs</span><strong>${money(financeData.projection.tutor_costs)}</strong><small>For completed and booked lessons</small></article>
+    <article class="stat"><span class="eyebrow">Projected Net Commission</span><strong>${money(financeData.projection.gross_margin)}</strong><small>Projected gross less tutor costs</small></article>
+    <article class="stat"><span class="eyebrow">Need Notes</span><strong>${incomplete.length}</strong><small>Past lessons incomplete</small></article>
+    <article class="stat"><span class="eyebrow">Tutors</span><strong>${tutors.length}</strong><small>Tutor accounts</small></article>
   ` : `${coreStats}
     <article class="stat"><span class="eyebrow">Need Notes</span><strong>${incomplete.length}</strong><small>Past lessons incomplete</small></article>
     <article class="stat"><span class="eyebrow">Tutors</span><strong>${tutors.length}</strong><small>Tutor accounts</small></article>
