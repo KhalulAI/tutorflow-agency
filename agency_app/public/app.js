@@ -30,7 +30,7 @@ const els = {
   userBadge: $("#userBadge"),
   tabs: $$(".tab"),
   pages: $$(".page"),
-  homeMonth: $("#homeMonth"),
+  homeMonthLabel: $("#homeMonthLabel"),
   homeStats: $("#homeStats"),
   upcomingList: $("#upcomingList"),
   completionList: $("#completionList"),
@@ -292,7 +292,7 @@ async function start() {
     $("#financeHeading").textContent = "Income & Expenses";
     $("#financeEyebrow").textContent = "Personal Practice";
   }
-  els.homeMonth.value = currentMonth();
+  els.homeMonthLabel.textContent = formatMonthLabel(currentMonth());
   els.calendarMonth.value = currentMonth();
   els.completedMonth.value = currentMonth();
   els.completedDay.value = today();
@@ -1236,12 +1236,14 @@ async function completeLesson(event) {
 }
 
 async function loadHome() {
-  const data = await api(`/api/bookings?month=${encodeURIComponent(els.homeMonth.value)}`);
+  const dashboardMonth = currentMonth();
+  els.homeMonthLabel.textContent = formatMonthLabel(dashboardMonth);
+  const data = await api(`/api/bookings?month=${encodeURIComponent(dashboardMonth)}`);
   const monthBookings = data.bookings;
-  const lessonData = await api(`/api/reports/lessons?month=${encodeURIComponent(els.homeMonth.value)}`);
+  const lessonData = await api(`/api/reports/lessons?month=${encodeURIComponent(dashboardMonth)}`);
   const done = lessonData.lessons;
   const financeData = currentUser.role === "Master"
-    ? await api(`/api/finance/summary?period=month&anchor=${encodeURIComponent(`${els.homeMonth.value}-01`)}`)
+    ? await api(`/api/finance/summary?period=month&anchor=${encodeURIComponent(`${dashboardMonth}-01`)}`)
     : null;
   const now = new Date();
   const incomplete = monthBookings.filter((booking) => booking.status !== "Completed" && new Date(booking.start_at) < now);
@@ -1602,7 +1604,6 @@ els.calendarPreviousMonth.addEventListener("click", () => changeCalendarMonth(-1
 els.calendarNextMonth.addEventListener("click", () => changeCalendarMonth(1));
 els.calendarCurrentMonth.addEventListener("click", showCurrentCalendarMonth);
 els.toggleMonthLock.addEventListener("click", toggleMonthLock);
-els.homeMonth.addEventListener("change", loadHome);
 els.completedPeriod.addEventListener("change", () => {
   updateCompletedPeriodFields();
   loadCompletedLessons();
