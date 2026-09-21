@@ -1238,20 +1238,12 @@ async function loadHome() {
       <div class="stat-grid"><article class="stat"><span class="eyebrow">Projected Income</span><strong>${money(financeData.projection.gross_income)}</strong><small>Expected total if booked lessons go ahead</small></article></div>
     </section>
   ` : financeData ? `${scheduleStats}
-    <section class="stat-section actual-section">
-      <div class="stat-section-head"><div><span class="eyebrow">Actual so far</span><h3>Completed lessons only</h3></div></div>
-      <div class="stat-grid">
-        <article class="stat"><span class="eyebrow">Gross Earned</span><strong>${money(financeData.summary.gross_income)}</strong><small>Charged for completed lessons</small></article>
-        <article class="stat"><span class="eyebrow">Tutor Costs Incurred</span><strong>${money(financeData.summary.tutor_costs)}</strong><small>Pay for completed lessons</small></article>
-        <article class="stat"><span class="eyebrow">Net Commission Earned</span><strong>${money(financeData.summary.gross_margin)}</strong><small>Gross earned less tutor costs</small></article>
-      </div>
-    </section>
     <section class="stat-section forecast-section">
-      <div class="stat-section-head"><div><span class="eyebrow">Projected month total</span><h3>Completed lessons + ${financeData.projection.remaining_booked_count} still booked</h3></div></div>
+      <div class="stat-section-head"><div><span class="eyebrow">This month's forecast</span><h3>Completed lessons + ${financeData.projection.remaining_booked_count} still booked</h3></div></div>
       <div class="stat-grid">
         <article class="stat"><span class="eyebrow">Projected Gross</span><strong>${money(financeData.projection.gross_income)}</strong><small>Expected client charges</small></article>
         <article class="stat"><span class="eyebrow">Projected Tutor Costs</span><strong>${money(financeData.projection.tutor_costs)}</strong><small>Expected tutor pay</small></article>
-        <article class="stat"><span class="eyebrow">Projected Net Commission</span><strong>${money(financeData.projection.gross_margin)}</strong><small>Projected gross less tutor costs</small></article>
+        <article class="stat"><span class="eyebrow">Projected Commission</span><strong>${money(financeData.projection.gross_margin)}</strong><small>Projected gross less tutor costs</small></article>
       </div>
     </section>
     <section class="stat-section"><div class="stat-grid"><article class="stat"><span class="eyebrow">Tutors</span><strong>${tutors.length}</strong><small>Tutor accounts</small></article></div></section>
@@ -1468,21 +1460,11 @@ async function loadFinance() {
     </section>
   ` : `
     <section class="stat-section actual-section">
-      <div class="stat-section-head"><div><span class="eyebrow">Actual so far</span><h3>Completed lessons only</h3></div></div>
+      <div class="stat-section-head"><div><span class="eyebrow">Completed lessons only</span><h3>Actual figures for this period</h3></div></div>
       <div class="stat-grid">
         <article class="stat"><span class="eyebrow">Gross Earned</span><strong>${money(summary.gross_income)}</strong><small>${summary.lesson_count} completed lessons</small></article>
         <article class="stat"><span class="eyebrow">Tutor Costs Incurred</span><strong>${money(summary.tutor_costs)}</strong><small>Pay for completed lessons</small></article>
-        <article class="stat"><span class="eyebrow">Net Commission Earned</span><strong>${money(summary.gross_margin)}</strong><small>Gross earned less tutor costs</small></article>
-        <article class="stat"><span class="eyebrow">Other Expenses</span><strong>${money(summary.expenses)}</strong><small>Saved in TutorFlow</small></article>
-        <article class="stat"><span class="eyebrow">Net Income</span><strong>${money(summary.net_income)}</strong><small>Commission earned less expenses</small></article>
-      </div>
-    </section>
-    <section class="stat-section forecast-section">
-      <div class="stat-section-head"><div><span class="eyebrow">Projected period total</span><h3>Completed lessons + ${projection.remaining_booked_count} still booked</h3></div></div>
-      <div class="stat-grid">
-        <article class="stat"><span class="eyebrow">Projected Gross</span><strong>${money(projection.gross_income)}</strong><small>Expected client charges</small></article>
-        <article class="stat"><span class="eyebrow">Projected Tutor Costs</span><strong>${money(projection.tutor_costs)}</strong><small>Expected tutor pay</small></article>
-        <article class="stat"><span class="eyebrow">Projected Net Commission</span><strong>${money(projection.gross_margin)}</strong><small>Projected gross less tutor costs</small></article>
+        <article class="stat"><span class="eyebrow">Commission Earned</span><strong>${money(summary.gross_margin)}</strong><small>Gross earned less tutor costs</small></article>
       </div>
     </section>
   `;
