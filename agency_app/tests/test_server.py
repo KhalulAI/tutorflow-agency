@@ -1052,6 +1052,92 @@ class AgencyApiTests(unittest.TestCase):
         self.assertEqual(expense_error.exception.code, 403)
 
 
+    def test_master_deleting_completed_booking_removes_finance_and_timesheet_record(self):
+        self.login_as_master()
+        _, created = self.api(
+            "/api/users",
+            "POST",
+            {"name": "Deletion Tutor", "email": "deletion@example.com", "hourly_rate": 40},
+        )
+        _, users = self.api("/api/users")
+        tutor = next(item for item in users["users"] if item["email"] == "deletion@example.com")
+        self.api(
+            "/api/students",
+            "POST",
+            {
+                "student_name": "Deletion Student",
+                "hourly_rate": 100,
+                "tutor_assignments": [{
+                    "tutor_id": tutor["user_id"],
+                    "client_hourly_rate": 100,
+                    "tutor_hourly_rate": 40,
+                }],
+            },
+        )
+        _, students = self.api("/api/students")
+        student = students["students"][0]
+        start_at = "2026-09-12T16:00:00"
+        self.api(
+            "/api/bookings",
+            "POST",
+            {
+                "student_id": student["student_id"],
+                "tutor_id": tutor["user_id"],
+                "start_at": start_at,
+                "duration_minutes": 60,
+            },
+        )
+        _, calendar = self.api("/api/bookings?month=2026-09")
+        booking_id = calendar["bookings"][0]["booking_id"]
+        self.api(
+            f"/api/bookings/{booking_id}/complete",
+            "POST",
+            {"parent_summary": "Mistaken completion", "emailed_to_parent": False},
+        )
+
+        _, before_finance = self.api("/api/finance/summary?period=month&anchor=2026-09-12")
+        _, before_timesheet = self.api(f"/api/timesheet?month=2026-09&tutor_id={tutor['user_id']}")
+        self.assertEqual(before_finance["projection"]["gross_income"], 100)
+        self.assertEqual(len(before_timesheet["lessons"]), 1)
+
+        _, deleted = self.api(f"/api/bookings/{booking_id}/delete", "POST", {})
+        self.assertEqual(deleted["deleted_bookings"], 1)
+        self.assertEqual(deleted["deleted_lesson_records"], 1)
+
+        _, after_finance = self.api("/api/finance/summary?period=month&anchor=2026-09-12")
+        _, after_timesheet = self.api(f"/api/timesheet?month=2026-09&tutor_id={tutor['user_id']}")
+        self.assertEqual(after_finance["projection"]["gross_income"], 0)
+        self.assertEqual(after_timesheet["lessons"], [])
+
+    def test_startup_removes_completion_records_orphaned_by_older_deletions(self):
+        self.login_as_master()
+        _, user = self.api("/api/session")
+        master_id = user["user"]["user_id"]
+        self.api("/api/students", "POST", {"student_name": "Orphan Student", "hourly_rate": 75})
+        _, students = self.api("/api/students")
+        student_id = students["students"][0]["student_id"]
+        self.api(
+            "/api/bookings",
+            "POST",
+            {"student_id": student_id, "tutor_id": master_id, "start_at": "2026-09-13T16:00:00"},
+        )
+        _, calendar = self.api("/api/bookings?month=2026-09")
+        booking_id = calendar["bookings"][0]["booking_id"]
+        self.api(
+            f"/api/bookings/{booking_id}/complete",
+            "POST",
+            {"parent_summary": "Old orphan", "emailed_to_parent": False},
+        )
+        with server.db() as connection:
+            connection.execute("UPDATE lesson_records SET booking_id = NULL WHERE booking_id = ?", (booking_id,))
+            connection.execute("DELETE FROM bookings WHERE booking_id = ?", (booking_id,))
+            self.assertEqual(connection.execute("SELECT COUNT(*) AS count FROM lesson_records").fetchone()["count"], 1)
+
+        server.init_db()
+
+        with server.db() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) AS count FROM lesson_records").fetchone()["count"], 0)
+
     def test_tutor_can_delete_mistaken_booking_but_month_lock_prevents_changes(self):
         self.login_as_master()
         _, created = self.api(

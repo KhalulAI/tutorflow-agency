@@ -1118,7 +1118,11 @@ async function cancelBooking() {
 }
 
 async function deleteBooking() {
-  if (!confirm("Delete this mistaken lesson entry permanently? This cannot be undone.")) return;
+  const booking = bookings.find((item) => Number(item.booking_id) === Number(els.bookingEditId.value));
+  const completedWarning = booking?.status === "Completed"
+    ? " Its completion record and lesson notes will also be removed from reports, projections and timesheets."
+    : "";
+  if (!confirm(`Delete this mistaken lesson entry permanently?${completedWarning} This cannot be undone.`)) return;
   try {
     await api(`/api/bookings/${els.bookingEditId.value}/delete`, { method: "POST", body: "{}" });
     els.bookingDialog.close();
@@ -1146,7 +1150,10 @@ async function deleteBookingSeries() {
     els.bookingDialog.close();
     await loadCalendar();
     await loadHome();
-    alert(`${result.deleted_bookings} ${result.deleted_bookings === 1 ? "lesson was" : "lessons were"} deleted.`);
+    const recordNote = result.deleted_lesson_records
+      ? ` ${result.deleted_lesson_records} associated completion ${result.deleted_lesson_records === 1 ? "record was" : "records were"} also removed.`
+      : "";
+    alert(`${result.deleted_bookings} ${result.deleted_bookings === 1 ? "lesson was" : "lessons were"} deleted.${recordNote}`);
   } catch (error) {
     els.bookingEditMessage.textContent = error.message;
   }

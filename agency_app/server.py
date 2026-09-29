@@ -680,6 +680,10 @@ def init_db() -> None:
             WHERE tutor_hourly_rate IS NULL
             """
         )
+        # A permanently deleted calendar entry must not continue contributing to
+        # finance reports or timesheets. Older versions left the completion row
+        # behind because the booking foreign key used ON DELETE SET NULL.
+        conn.execute("DELETE FROM lesson_records WHERE booking_id IS NULL")
         if not PERSONAL_WORKSPACE:
             merge_legacy_duplicate_students(conn)
 
@@ -2801,11 +2805,24 @@ class Handler(SimpleHTTPRequestHandler):
                 if payload.get("preview"):
                     return self.send_json({"ok": True, "count": len(targets)})
                 placeholders = ", ".join("?" for _item in targets)
+                target_ids = tuple(item["booking_id"] for item in targets)
+                deleted_lesson_records = conn.execute(
+                    f"SELECT COUNT(*) AS count FROM lesson_records WHERE booking_id IN ({placeholders})",
+                    target_ids,
+                ).fetchone()["count"]
+                conn.execute(
+                    f"DELETE FROM lesson_records WHERE booking_id IN ({placeholders})",
+                    target_ids,
+                )
                 conn.execute(
                     f"DELETE FROM bookings WHERE booking_id IN ({placeholders})",
-                    tuple(item["booking_id"] for item in targets),
+                    target_ids,
                 )
-            return self.send_json({"ok": True, "deleted_bookings": len(targets)})
+            return self.send_json({
+                "ok": True,
+                "deleted_bookings": len(targets),
+                "deleted_lesson_records": deleted_lesson_records,
+            })
 
         if path == "/api/timesheet/submit":
             if PERSONAL_WORKSPACE:
