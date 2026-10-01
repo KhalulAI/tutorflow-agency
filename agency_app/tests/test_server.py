@@ -6,7 +6,7 @@ import os
 import tempfile
 import threading
 import unittest
-from datetime import datetime
+from datetime import date, datetime
 from io import BytesIO, StringIO
 from pathlib import Path
 from urllib.error import HTTPError
@@ -14,6 +14,7 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener
 from unittest.mock import patch
 
 import server
+from openpyxl import load_workbook
 from pypdf import PdfReader
 
 
@@ -24,6 +25,7 @@ class AgencyApiTests(unittest.TestCase):
         self.original_send_email = server.send_lesson_email
         self.original_send_credentials = server.send_tutor_credentials_email
         self.original_send_password_reset = server.send_password_reset_email
+        self.original_send_timesheet = server.send_timesheet_email
         server.DB_PATH = Path(self.temp_dir.name) / "agency.sqlite3"
         server.init_db()
         self.httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
@@ -40,6 +42,7 @@ class AgencyApiTests(unittest.TestCase):
         server.send_lesson_email = self.original_send_email
         server.send_tutor_credentials_email = self.original_send_credentials
         server.send_password_reset_email = self.original_send_password_reset
+        server.send_timesheet_email = self.original_send_timesheet
         self.temp_dir.cleanup()
 
     def api(self, path, method="GET", body=None, opener=None):
@@ -297,6 +300,62 @@ class AgencyApiTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as invalid_order:
             self.api(f"/api/timesheet?month={month}&order=unknown")
         self.assertEqual(invalid_order.exception.code, 400)
+
+    def test_approving_timesheet_emails_the_previewed_pdf_to_tutor(self):
+        self.login_as_master()
+        server.send_tutor_credentials_email = lambda *_args, **_kwargs: "credentials-message"
+        _, created = self.api(
+            "/api/users", "POST",
+            {"name": "Approval Tutor", "email": "approval@example.com", "hourly_rate": 42},
+        )
+        _, users = self.api("/api/users")
+        tutor = next(item for item in users["users"] if item["email"] == "approval@example.com")
+        self.api(
+            "/api/students", "POST",
+            {"student_name": "Approval Student", "parent_email": "parent@example.com",
+             "hourly_rate": 75, "tutor_hourly_rate": 42, "assigned_tutor_id": tutor["user_id"]},
+        )
+        _, students = self.api("/api/students")
+        month = datetime.now().strftime("%Y-%m")
+        self.api(
+            "/api/bookings", "POST",
+            {"student_id": students["students"][0]["student_id"], "tutor_id": tutor["user_id"],
+             "start_at": f"{month}-10T16:00:00", "duration_minutes": 60},
+        )
+        _, bookings = self.api(f"/api/bookings?month={month}")
+        self.api(
+            f"/api/bookings/{bookings['bookings'][0]['booking_id']}/complete", "POST",
+            {"attendance_status": "Completed", "parent_summary": "", "emailed_to_parent": False},
+        )
+
+        preview_request = Request(
+            self.base_url + f"/api/timesheet?month={month}&tutor_id={tutor['user_id']}&format=pdf"
+        )
+        with self.opener.open(preview_request) as response:
+            preview_pdf = response.read()
+        self.assertTrue(preview_pdf.startswith(b"%PDF"))
+
+        email_calls = []
+        server.send_timesheet_email = lambda *args: email_calls.append(args) or "timesheet-message-id"
+        _, result = self.api(
+            "/api/timesheet/status", "POST",
+            {"month": month, "tutor_id": tutor["user_id"], "status": "Approved"},
+        )
+        self.assertTrue(result["email_sent"])
+        self.assertEqual(result["postmark_message_id"], "timesheet-message-id")
+        self.assertEqual(result["tutor_email"], "approval@example.com")
+        self.assertEqual(email_calls[0][:3], ("approval@example.com", "Approval Tutor", month))
+        self.assertTrue(email_calls[0][3].startswith(b"%PDF"))
+        _, approved = self.api(f"/api/timesheet?month={month}&tutor_id={tutor['user_id']}")
+        self.assertEqual(approved["lessons"][0]["timesheet_status"], "Approved")
+
+        server.send_timesheet_email = lambda *_args: (_ for _ in ()).throw(RuntimeError("mail unavailable"))
+        with self.assertRaises(HTTPError) as failed_email:
+            self.api(
+                "/api/timesheet/status", "POST",
+                {"month": month, "tutor_id": tutor["user_id"], "status": "Approved"},
+            )
+        self.assertEqual(failed_email.exception.code, 502)
 
     def test_personal_owner_teaches_without_duplicate_tutor_cost(self):
         user = self.login_as_master()
@@ -596,6 +655,44 @@ class AgencyApiTests(unittest.TestCase):
         self.assertIn("80.0,80.0,50.0,50.0,30.0", master_csv)
         self.assertIn("MONTH TOTAL,,,,,80.0,,50.0,30.0", master_csv)
 
+        master_xlsx_request = Request(
+            self.base_url + f"/api/reports/lessons?month={start_at[:7]}&format=xlsx&group_by=student",
+            method="GET",
+        )
+        with self.opener.open(master_xlsx_request) as response:
+            workbook_bytes = response.read()
+            self.assertEqual(
+                response.headers.get_content_type(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            self.assertIn("invoicing-", response.headers["Content-Disposition"])
+        workbook = load_workbook(BytesIO(workbook_bytes), data_only=False)
+        sheet = workbook["Lessons"]
+        self.assertEqual(sheet["A1"].value, "SWL Education Ltd - Completed Lesson Invoice Report")
+        self.assertEqual(sheet["E2"].value, "Student")
+        self.assertEqual(
+            [sheet.cell(row=7, column=column).value for column in range(1, 12)],
+            ["Date", "Start time", "Student", "Tutor", "Lesson length (minutes)",
+             "Client hourly rate", "Client invoice amount", "Tutor hourly rate",
+             "Tutor pay", "Agency commission", "Attendance"],
+        )
+        self.assertEqual(sheet["C8"].value, "Private Rate Student")
+        self.assertEqual(sheet["F8"].value, 80)
+        self.assertEqual(sheet["H8"].value, 50)
+        self.assertEqual(sheet["G8"].value, "=ROUND(E8*F8/60,2)")
+        self.assertEqual(sheet["I8"].value, "=ROUND(E8*H8/60,2)")
+        self.assertEqual(sheet["J8"].value, "=G8-I8")
+
+        range_xlsx_request = Request(
+            self.base_url + f"/api/reports/lessons?start={start_at[:10]}&end={start_at[:10]}&format=xlsx&group_by=tutor",
+            method="GET",
+        )
+        with self.opener.open(range_xlsx_request) as response:
+            range_workbook = load_workbook(BytesIO(response.read()), data_only=False)
+        range_sheet = range_workbook["Lessons"]
+        self.assertIn(date.fromisoformat(start_at[:10]).strftime("%d %B %Y"), range_sheet["B2"].value)
+        self.assertEqual(range_sheet["E2"].value, "Tutor")
+
         tutor_csv_request = Request(
             self.base_url + f"/api/reports/lessons?month={start_at[:7]}&format=csv",
             method="GET",
@@ -604,6 +701,12 @@ class AgencyApiTests(unittest.TestCase):
             tutor_csv = response.read().decode("utf-8-sig")
         self.assertNotIn("Client Hourly Rate", tutor_csv)
         self.assertNotIn("Amount Charged", tutor_csv)
+        with self.assertRaises(HTTPError) as tutor_xlsx_error:
+            tutor_opener.open(Request(
+                self.base_url + f"/api/reports/lessons?month={start_at[:7]}&format=xlsx",
+                method="GET",
+            ))
+        self.assertEqual(tutor_xlsx_error.exception.code, 403)
 
     def test_student_can_have_multiple_tutors_with_pairing_specific_rates(self):
         self.login_as_master()
@@ -1466,6 +1569,23 @@ class PostmarkTests(unittest.TestCase):
         self.assertNotIn("LESSON NOTES", message["TextBody"])
         self.assertIn("Great work.", message["TextBody"])
         self.assertTrue(message["TextBody"].rstrip().endswith("SWL Education Ltd"))
+
+    def test_approved_timesheet_email_attaches_pdf(self):
+        with patch.object(server, "send_postmark_email", return_value="message-456") as send:
+            message_id = server.send_timesheet_email(
+                "tutor@example.com", "Grace Tutor", "2026-09", b"%PDF-test"
+            )
+        self.assertEqual(message_id, "message-456")
+        self.assertEqual(send.call_args.args[:3], (
+            "tutor@example.com",
+            "Approved timesheet - September 2026",
+            send.call_args.args[2],
+        ))
+        self.assertIn("has been approved", send.call_args.args[2])
+        attachment = send.call_args.kwargs["attachments"][0]
+        self.assertEqual(attachment["ContentType"], "application/pdf")
+        self.assertEqual(base64.b64decode(attachment["Content"]), b"%PDF-test")
+        self.assertIn("timesheet-2026-09-grace-tutor.pdf", attachment["Name"])
 
 
 if __name__ == "__main__":

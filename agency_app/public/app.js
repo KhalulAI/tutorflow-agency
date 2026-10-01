@@ -3,6 +3,7 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 let businessName = "SWL Education Ltd";
 let personalWorkspace = false;
 let personalTeacher = null;
+let timesheetPreviewReady = false;
 
 const els = {
   authScreen: $("#authScreen"),
@@ -103,8 +104,12 @@ const els = {
   timesheetSummary: $("#timesheetSummary"),
   timesheetList: $("#timesheetList"),
   reportMonth: $("#reportMonth"),
+  reportPeriod: $("#reportPeriod"),
+  reportStart: $("#reportStart"),
+  reportEnd: $("#reportEnd"),
   reportTutor: $("#reportTutor"),
   reportStudent: $("#reportStudent"),
+  reportGroupBy: $("#reportGroupBy"),
   loadReports: $("#loadReports"),
   downloadReports: $("#downloadReports"),
   reportList: $("#reportList"),
@@ -300,11 +305,14 @@ async function start() {
   els.completedEnd.value = today();
   els.timesheetMonth.value = currentMonth();
   els.reportMonth.value = currentMonth();
+  els.reportStart.value = `${currentMonth()}-01`;
+  els.reportEnd.value = today();
   els.financeAnchor.value = today();
   els.expenseDate.value = today();
   els.bookingDate.value = today();
   els.bookingTime.value = "16:00";
   updateCompletedPeriodFields();
+  updateReportPeriodFields();
 
   const resetToken = new URLSearchParams(location.search).get("reset_token");
   if (resetToken) {
@@ -1376,6 +1384,8 @@ function bookingItem(booking, quickComplete = false) {
 }
 
 async function loadTimesheet() {
+  timesheetPreviewReady = false;
+  if (currentUser?.role === "Master" && !personalWorkspace) els.approveTimesheet.disabled = true;
   const tutorQuery = !personalWorkspace && currentUser.role === "Master" && els.timesheetTutor.value ? `&tutor_id=${encodeURIComponent(els.timesheetTutor.value)}` : "";
   const orderQuery = `&order=${encodeURIComponent(els.timesheetOrder.value)}`;
   const data = await api(`/api/timesheet?month=${encodeURIComponent(els.timesheetMonth.value)}${tutorQuery}${orderQuery}`);
@@ -1413,6 +1423,11 @@ function openTimesheetDownload() {
 
 function openTimesheetPdf() {
   downloadTimesheetFile("pdf");
+  if (currentUser?.role === "Master" && !personalWorkspace && els.timesheetTutor.value) {
+    timesheetPreviewReady = true;
+    els.approveTimesheet.disabled = false;
+    els.timesheetSummary.textContent = "PDF preview opened. Check it, then return here to approve and email the tutor.";
+  }
 }
 
 async function submitTimesheet() {
@@ -1427,21 +1442,53 @@ async function submitTimesheet() {
 
 async function setTimesheetStatus(status) {
   if (currentUser.role !== "Master" || !els.timesheetTutor.value) return;
+  if (status === "Approved") {
+    if (!timesheetPreviewReady) {
+      els.timesheetSummary.textContent = "Preview the PDF before approving this timesheet.";
+      return;
+    }
+    const tutorName = els.timesheetTutor.selectedOptions[0]?.textContent || "this tutor";
+    const monthLabel = formatMonthLabel(els.timesheetMonth.value);
+    if (!window.confirm(`Approve ${tutorName}'s ${monthLabel} timesheet and email the PDF to them now?`)) return;
+  }
   try {
-    await api("/api/timesheet/status", {
+    const result = await api("/api/timesheet/status", {
       method: "POST",
       body: JSON.stringify({ month: els.timesheetMonth.value, tutor_id: els.timesheetTutor.value, status }),
     });
     await loadTimesheet();
+    if (result.email_sent) {
+      els.timesheetSummary.textContent = `Timesheet approved and emailed to ${result.tutor_email}.`;
+    }
   } catch (error) {
     els.timesheetSummary.textContent = error.message;
   }
 }
 
-async function loadReports() {
-  const qs = new URLSearchParams({ month: els.reportMonth.value });
+function updateReportPeriodFields() {
+  const range = els.reportPeriod.value === "range";
+  els.reportMonth.hidden = range;
+  els.reportStart.hidden = !range;
+  els.reportEnd.hidden = !range;
+}
+
+function reportQuery(format = "") {
+  const qs = new URLSearchParams();
+  if (els.reportPeriod.value === "range") {
+    qs.set("start", els.reportStart.value);
+    qs.set("end", els.reportEnd.value);
+  } else {
+    qs.set("month", els.reportMonth.value);
+  }
   if (!personalWorkspace && els.reportTutor.value) qs.set("tutor_id", els.reportTutor.value);
   if (els.reportStudent.value) qs.set("student_id", els.reportStudent.value);
+  qs.set("group_by", els.reportGroupBy.value);
+  if (format) qs.set("format", format);
+  return qs;
+}
+
+async function loadReports() {
+  const qs = reportQuery();
   const data = await api(`/api/reports/lessons?${qs.toString()}`);
   lessons = data.lessons;
   const rateKey = currentUser.role === "Master" ? "student_rate" : "tutor_rate";
@@ -1460,9 +1507,7 @@ async function loadReports() {
 }
 
 function downloadReports() {
-  const qs = new URLSearchParams({ month: els.reportMonth.value, format: "csv" });
-  if (!personalWorkspace && els.reportTutor.value) qs.set("tutor_id", els.reportTutor.value);
-  if (els.reportStudent.value) qs.set("student_id", els.reportStudent.value);
+  const qs = reportQuery("xlsx");
   window.open(`/api/reports/lessons?${qs.toString()}`, "_blank");
 }
 
@@ -1635,6 +1680,16 @@ els.downloadTimesheetPdf.addEventListener("click", openTimesheetPdf);
 els.submitTimesheet.addEventListener("click", submitTimesheet);
 els.approveTimesheet.addEventListener("click", () => setTimesheetStatus("Approved"));
 els.queryTimesheet.addEventListener("click", () => setTimesheetStatus("Queried"));
+els.reportPeriod.addEventListener("change", () => {
+  updateReportPeriodFields();
+  loadReports();
+});
+els.reportMonth.addEventListener("change", loadReports);
+els.reportStart.addEventListener("change", loadReports);
+els.reportEnd.addEventListener("change", loadReports);
+els.reportTutor.addEventListener("change", loadReports);
+els.reportStudent.addEventListener("change", loadReports);
+els.reportGroupBy.addEventListener("change", loadReports);
 els.loadReports.addEventListener("click", loadReports);
 els.downloadReports.addEventListener("click", downloadReports);
 els.financePeriod.addEventListener("change", loadFinance);

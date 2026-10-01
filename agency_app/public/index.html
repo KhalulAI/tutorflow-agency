@@ -211,9 +211,9 @@
             </select>
             <button id="loadTimesheet" type="button">Refresh</button>
             <button id="downloadTimesheet" type="button">Download Excel/CSV</button>
-            <button id="downloadTimesheetPdf" type="button">Download PDF</button>
+            <button id="downloadTimesheetPdf" type="button">Preview PDF</button>
             <button id="submitTimesheet" class="personal-hidden" type="button">Mark Submitted To Scott</button>
-            <button id="approveTimesheet" class="master-only personal-hidden" type="button">Approve</button>
+            <button id="approveTimesheet" class="master-only personal-hidden" type="button" disabled>Approve &amp; Email Tutor</button>
             <button id="queryTimesheet" class="master-only personal-hidden" type="button">Query</button>
           </div>
           <div id="timesheetSummary" class="notice"></div>
@@ -225,11 +225,22 @@
         <header class="page-head"><div><p class="eyebrow">Oversight</p><h2>Lesson Reports</h2></div></header>
         <section class="panel">
           <div class="toolbar">
-            <input id="reportMonth" type="month">
+            <select id="reportPeriod" aria-label="Report period">
+              <option value="month">Given month</option>
+              <option value="range">Date range</option>
+            </select>
+            <input id="reportMonth" type="month" aria-label="Report month">
+            <input id="reportStart" type="date" aria-label="Report start date" hidden>
+            <input id="reportEnd" type="date" aria-label="Report end date" hidden>
             <select id="reportTutor" class="personal-hidden"></select>
             <select id="reportStudent"></select>
+            <select id="reportGroupBy" aria-label="Order invoicing workbook by">
+              <option value="date">Order by date</option>
+              <option value="student">Group by student</option>
+              <option value="tutor">Group by tutor</option>
+            </select>
             <button id="loadReports" class="report-action" type="button">Load Report</button>
-            <button id="downloadReports" class="report-action" type="button">Download Month-End Sheet</button>
+            <button id="downloadReports" class="report-action" type="button">Download Excel Invoice Report</button>
           </div>
           <div id="reportList" class="list"></div>
         </section>

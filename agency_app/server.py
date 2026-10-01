@@ -784,7 +784,13 @@ def postmark_configured() -> bool:
     return bool(os.environ.get("POSTMARK_SERVER_TOKEN") and os.environ.get("POSTMARK_FROM_EMAIL"))
 
 
-def send_postmark_email(recipient: str, subject: str, body: str, reply_to: str = "") -> str:
+def send_postmark_email(
+    recipient: str,
+    subject: str,
+    body: str,
+    reply_to: str = "",
+    attachments: list[dict] | None = None,
+) -> str:
     token = os.environ.get("POSTMARK_SERVER_TOKEN", "").strip()
     from_email = os.environ.get("POSTMARK_FROM_EMAIL", "").strip()
     from_name = POSTMARK_FROM_NAME
@@ -802,6 +808,8 @@ def send_postmark_email(recipient: str, subject: str, body: str, reply_to: str =
     }
     if reply_to:
         message["ReplyTo"] = reply_to
+    if attachments:
+        message["Attachments"] = attachments
     request = Request(
         "https://api.postmarkapp.com/email",
         data=json.dumps(message).encode("utf-8"),
@@ -845,6 +853,34 @@ Kind regards,
         f"Lesson Notes - {student_name}",
         body,
         reply_to,
+    )
+
+
+def send_timesheet_email(recipient: str, tutor_name: str, month: str, pdf: bytes) -> str:
+    if not recipient:
+        raise ValueError("The tutor does not have an email address.")
+    try:
+        period_label = datetime.strptime(month, "%Y-%m").strftime("%B %Y")
+    except (TypeError, ValueError):
+        period_label = str(month or "selected period")
+    safe_tutor = re.sub(r"[^a-z0-9]+", "-", tutor_name.lower()).strip("-") or "tutor"
+    filename = f"{BUSINESS_FILE_PREFIX}-timesheet-{month}-{safe_tutor}.pdf"
+    body = f"""Hello {tutor_name},
+
+Your {period_label} timesheet has been approved. A copy is attached for your records.
+
+Kind regards,
+{BUSINESS_NAME}
+"""
+    return send_postmark_email(
+        recipient,
+        f"Approved timesheet - {period_label}",
+        body,
+        attachments=[{
+            "Name": filename,
+            "Content": base64.b64encode(pdf).decode("ascii"),
+            "ContentType": "application/pdf",
+        }],
     )
 
 
@@ -1324,6 +1360,157 @@ def build_timesheet_pdf(lessons, tutor, month: str) -> bytes:
     return output.getvalue()
 
 
+def build_invoicing_workbook(lessons, period_label: str, group_by: str = "date") -> bytes:
+    """Build the master-only agency invoicing workbook."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.worksheet.table import Table, TableStyleInfo
+
+    if group_by not in {"date", "student", "tutor"}:
+        raise ValueError("Report grouping must be date, student, or tutor.")
+
+    def lesson_datetime(lesson):
+        raw = lesson.get("start_at") or lesson.get("completed_at") or ""
+        try:
+            return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            return datetime.min
+
+    sort_keys = {
+        "date": lambda lesson: (lesson_datetime(lesson), str(lesson.get("student_name", "")).lower()),
+        "student": lambda lesson: (str(lesson.get("student_name", "")).lower(), lesson_datetime(lesson)),
+        "tutor": lambda lesson: (str(lesson.get("tutor_name", "")).lower(), lesson_datetime(lesson)),
+    }
+    ordered_lessons = sorted(lessons, key=sort_keys[group_by])
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Lessons"
+    sheet.sheet_view.showGridLines = False
+
+    dark_green = "123F42"
+    teal = "16877C"
+    pale_gold = "F5E9CC"
+    pale_green = "EAF3EE"
+    white = "FFFFFF"
+    muted = "617278"
+    thin_line = Side(style="thin", color="D8DED9")
+
+    sheet.merge_cells("A1:K1")
+    sheet["A1"] = f"{BUSINESS_NAME} - Completed Lesson Invoice Report"
+    sheet["A1"].font = Font(size=18, bold=True, color=white)
+    sheet["A1"].fill = PatternFill("solid", fgColor=dark_green)
+    sheet["A1"].alignment = Alignment(vertical="center")
+    sheet.row_dimensions[1].height = 30
+
+    sheet["A2"] = "Period"
+    sheet["B2"] = period_label
+    sheet["D2"] = "Ordered by"
+    sheet["E2"] = group_by.title()
+    for cell in (sheet["A2"], sheet["D2"]):
+        cell.font = Font(bold=True, color=muted)
+
+    summary = (
+        ("Completed lessons", len(ordered_lessons)),
+        ("Client invoiced", None),
+        ("Tutor pay", None),
+        ("Agency commission", None),
+    )
+    for index, (label, value) in enumerate(summary):
+        column = 1 + index * 2
+        label_cell = sheet.cell(row=4, column=column, value=label)
+        value_cell = sheet.cell(row=5, column=column, value=value)
+        label_cell.font = Font(bold=True, color=dark_green)
+        label_cell.fill = PatternFill("solid", fgColor=pale_gold)
+        value_cell.font = Font(size=14, bold=True, color=teal)
+        value_cell.fill = PatternFill("solid", fgColor=pale_green)
+        label_cell.border = value_cell.border = Border(bottom=thin_line)
+
+    headers = [
+        "Date", "Start time", "Student", "Tutor", "Lesson length (minutes)",
+        "Client hourly rate", "Client invoice amount", "Tutor hourly rate",
+        "Tutor pay", "Agency commission", "Attendance",
+    ]
+    header_row = 7
+    for column, header in enumerate(headers, start=1):
+        cell = sheet.cell(row=header_row, column=column, value=header)
+        cell.font = Font(bold=True, color=white)
+        cell.fill = PatternFill("solid", fgColor=teal)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = Border(bottom=thin_line)
+    sheet.row_dimensions[header_row].height = 34
+
+    first_data_row = header_row + 1
+    for row_number, lesson in enumerate(ordered_lessons, start=first_data_row):
+        when = lesson_datetime(lesson)
+        if when == datetime.min:
+            lesson_date, lesson_time = None, None
+        else:
+            lesson_date, lesson_time = when.date(), when.time().replace(second=0, microsecond=0)
+        minutes = int(lesson.get("duration_minutes") or 0)
+        client_rate = float(lesson.get("student_rate") or 0)
+        tutor_rate = float(lesson.get("tutor_rate") or 0)
+        values = [
+            lesson_date,
+            lesson_time,
+            lesson.get("student_name", ""),
+            lesson.get("tutor_name", ""),
+            minutes,
+            client_rate,
+            f"=ROUND(E{row_number}*F{row_number}/60,2)",
+            tutor_rate,
+            f"=ROUND(E{row_number}*H{row_number}/60,2)",
+            f"=G{row_number}-I{row_number}",
+            lesson.get("attendance_status", ""),
+        ]
+        for column, value in enumerate(values, start=1):
+            cell = sheet.cell(row=row_number, column=column, value=value)
+            cell.border = Border(bottom=thin_line)
+            if row_number % 2 == 0:
+                cell.fill = PatternFill("solid", fgColor="F7FAF8")
+
+    last_data_row = max(first_data_row, header_row + len(ordered_lessons))
+    if ordered_lessons:
+        sheet["A5"] = len(ordered_lessons)
+        sheet["C5"] = f"=SUM(G{first_data_row}:G{last_data_row})"
+        sheet["E5"] = f"=SUM(I{first_data_row}:I{last_data_row})"
+        sheet["G5"] = f"=SUM(J{first_data_row}:J{last_data_row})"
+        table = Table(displayName="CompletedLessons", ref=f"A{header_row}:K{last_data_row}")
+        table.tableStyleInfo = TableStyleInfo(
+            name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False,
+            showRowStripes=False, showColumnStripes=False,
+        )
+        sheet.add_table(table)
+    else:
+        sheet["A5"] = 0
+        sheet["C5"] = sheet["E5"] = sheet["G5"] = 0
+
+    for cell in (sheet["C5"], sheet["E5"], sheet["G5"]):
+        cell.number_format = '£#,##0.00'
+    for row_number in range(first_data_row, last_data_row + 1):
+        sheet.cell(row=row_number, column=1).number_format = "dd/mm/yyyy"
+        sheet.cell(row=row_number, column=2).number_format = "hh:mm"
+        for column in (6, 7, 8, 9, 10):
+            sheet.cell(row=row_number, column=column).number_format = '£#,##0.00'
+
+    widths = {"A": 13, "B": 12, "C": 24, "D": 24, "E": 20, "F": 18,
+              "G": 20, "H": 18, "I": 15, "J": 19, "K": 16}
+    for column, width in widths.items():
+        sheet.column_dimensions[column].width = width
+    sheet.freeze_panes = f"A{first_data_row}"
+    sheet.auto_filter.ref = f"A{header_row}:K{last_data_row}"
+    sheet.print_title_rows = f"1:{header_row}"
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.fitToWidth = 1
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    workbook.calculation.fullCalcOnLoad = True
+    workbook.calculation.forceFullCalc = True
+
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
 class Handler(SimpleHTTPRequestHandler):
     def translate_path(self, path):
         rel = unquote(urlparse(path).path).lstrip("/") or "index.html"
@@ -1639,6 +1826,12 @@ class Handler(SimpleHTTPRequestHandler):
                 start, end = query_period(query)
             except ValueError as error:
                 return self.send_json({"error": str(error)}, 400)
+            report_format = query.get("format", [""])[0].lower()
+            group_by = query.get("group_by", ["date"])[0].lower()
+            if group_by not in {"date", "student", "tutor"}:
+                return self.send_json({"error": "Report grouping must be date, student, or tutor."}, 400)
+            if report_format == "xlsx" and (PERSONAL_WORKSPACE or user["role"] != "Master"):
+                return self.send_json({"error": "The agency invoicing workbook is available to the master account only."}, 403)
             clauses = ["lr.completed_at >= ?", "lr.completed_at < ?"]
             params = [start, end]
             if user["role"] != "Master" or PERSONAL_WORKSPACE:
@@ -1677,7 +1870,23 @@ class Handler(SimpleHTTPRequestHandler):
                     """,
                     params,
                 ))
-            if query.get("format", [""])[0] == "csv":
+            if report_format == "xlsx":
+                month_value = query.get("month", [""])[0]
+                if month_value:
+                    period_label = datetime.strptime(month_value, "%Y-%m").strftime("%B %Y")
+                    safe_period = month_value
+                else:
+                    start_value = query.get("start", [start[:10]])[0]
+                    end_value = query.get("end", [(datetime.fromisoformat(end) - timedelta(days=1)).date().isoformat()])[0]
+                    period_label = f"{date.fromisoformat(start_value).strftime('%d %B %Y')} to {date.fromisoformat(end_value).strftime('%d %B %Y')}"
+                    safe_period = f"{start_value}-to-{end_value}"
+                safe_period = re.sub(r"[^0-9a-z-]+", "-", safe_period.lower()).strip("-") or "report"
+                return self.send_bytes(
+                    build_invoicing_workbook(lessons, period_label, group_by),
+                    f"{BUSINESS_FILE_PREFIX}-invoicing-{safe_period}.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            if report_format == "csv":
                 if PERSONAL_WORKSPACE:
                     return self.export_personal_lessons_csv(lessons, query.get("month", [start[:7]])[0])
                 if user["role"] == "Master":
@@ -2852,11 +3061,50 @@ class Handler(SimpleHTTPRequestHandler):
             with db() as conn:
                 if month_is_locked(conn, month):
                     return self.send_json({"error": locked_month_message(month)}, 423)
+                tutor_row = conn.execute(
+                    "SELECT user_id, name, email, hourly_rate FROM users WHERE user_id = ? AND role = 'Tutor'",
+                    (tutor_id,),
+                ).fetchone()
+                tutor = dict(tutor_row) if tutor_row else None
+                lessons = rows(conn.execute(
+                    """
+                    SELECT lr.lesson_record_id, lr.completed_at, lr.attendance_status,
+                           lr.timesheet_submitted, lr.timesheet_status,
+                           b.start_at, COALESCE(lr.duration_minutes, b.duration_minutes) AS duration_minutes,
+                           s.student_name,
+                           COALESCE(lr.tutor_hourly_rate, s.tutor_hourly_rate, u.hourly_rate) AS tutor_rate,
+                           u.name AS tutor_name
+                    FROM lesson_records lr
+                    LEFT JOIN bookings b ON b.booking_id = lr.booking_id
+                    JOIN students s ON s.student_id = lr.student_id
+                    JOIN users u ON u.user_id = lr.tutor_id
+                    WHERE lr.tutor_id = ? AND lr.completed_at >= ? AND lr.completed_at < ?
+                    ORDER BY COALESCE(b.start_at, lr.completed_at), LOWER(s.student_name), lr.lesson_record_id
+                    """,
+                    (tutor_id, start, end),
+                ))
+            if not tutor:
+                return self.send_json({"error": "Tutor not found."}, 404)
+            if not lessons:
+                return self.send_json({"error": "There are no completed lessons to approve for this tutor and month."}, 400)
+            message_id = ""
+            if status == "Approved":
+                pdf = build_timesheet_pdf(lessons, tutor, month)
+                try:
+                    message_id = send_timesheet_email(tutor.get("email", ""), tutor["name"], month, pdf)
+                except (RuntimeError, ValueError) as error:
+                    return self.send_json({"error": f"The timesheet was not approved because the email could not be sent: {error}"}, 502)
+            with db() as conn:
                 conn.execute(
                     "UPDATE lesson_records SET timesheet_status = ?, timesheet_submitted = 1 WHERE tutor_id = ? AND completed_at >= ? AND completed_at < ?",
                     (status, tutor_id, start, end),
                 )
-            return self.send_json({"ok": True})
+            return self.send_json({
+                "ok": True,
+                "email_sent": status == "Approved",
+                "postmark_message_id": message_id,
+                "tutor_email": tutor.get("email", "") if status == "Approved" else "",
+            })
 
         return self.send_json({"error": "Not found"}, 404)
 
