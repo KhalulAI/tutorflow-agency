@@ -110,8 +110,10 @@ const els = {
   reportTutor: $("#reportTutor"),
   reportStudent: $("#reportStudent"),
   reportGroupBy: $("#reportGroupBy"),
+  simpleReportOrder: $("#simpleReportOrder"),
   loadReports: $("#loadReports"),
   downloadReports: $("#downloadReports"),
+  downloadSimpleReport: $("#downloadSimpleReport"),
   reportList: $("#reportList"),
   financePeriod: $("#financePeriod"),
   financeAnchor: $("#financeAnchor"),
@@ -1511,6 +1513,12 @@ function downloadReports() {
   window.open(`/api/reports/lessons?${qs.toString()}`, "_blank");
 }
 
+function downloadSimpleReport() {
+  const qs = reportQuery("invoice_list_xlsx");
+  qs.set("group_by", els.simpleReportOrder.value);
+  window.open(`/api/reports/lessons?${qs.toString()}`, "_blank");
+}
+
 function financeQuery(format = "") {
   const qs = new URLSearchParams({
     period: els.financePeriod.value,
@@ -1692,6 +1700,7 @@ els.reportStudent.addEventListener("change", loadReports);
 els.reportGroupBy.addEventListener("change", loadReports);
 els.loadReports.addEventListener("click", loadReports);
 els.downloadReports.addEventListener("click", downloadReports);
+els.downloadSimpleReport.addEventListener("click", downloadSimpleReport);
 els.financePeriod.addEventListener("change", loadFinance);
 els.financeAnchor.addEventListener("change", loadFinance);
 els.loadFinance.addEventListener("click", loadFinance);

@@ -1511,6 +1511,128 @@ def build_invoicing_workbook(lessons, period_label: str, group_by: str = "date")
     return output.getvalue()
 
 
+def build_simple_invoice_list_workbook(lessons, period_label: str, group_by: str = "date") -> bytes:
+    """Build a concise master-only lesson list for client invoicing."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.worksheet.table import Table, TableStyleInfo
+
+    if group_by not in {"date", "student"}:
+        raise ValueError("Simple invoice list ordering must be date or student.")
+
+    def lesson_datetime(lesson):
+        raw = lesson.get("start_at") or lesson.get("completed_at") or ""
+        try:
+            return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).replace(tzinfo=None)
+        except (TypeError, ValueError):
+            return datetime.min
+
+    sort_key = (
+        (lambda lesson: (str(lesson.get("student_name", "")).lower(), lesson_datetime(lesson)))
+        if group_by == "student"
+        else (lambda lesson: (lesson_datetime(lesson), str(lesson.get("student_name", "")).lower()))
+    )
+    ordered_lessons = sorted(lessons, key=sort_key)
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Invoice list"
+    sheet.sheet_view.showGridLines = False
+
+    dark_green = "123F42"
+    teal = "16877C"
+    pale_gold = "F5E9CC"
+    white = "FFFFFF"
+    muted = "617278"
+    thin_line = Side(style="thin", color="D8DED9")
+
+    sheet["A2"] = f"{BUSINESS_NAME} - Monthly Lesson Invoice List"
+    sheet["A2"].font = Font(name="Arial", size=14, bold=True, color=dark_green)
+    sheet["A3"] = "Period"
+    sheet["B3"] = period_label
+    sheet["D3"] = "Ordered by"
+    sheet["E3"] = group_by.title()
+    for cell in (sheet["A3"], sheet["D3"]):
+        cell.font = Font(name="Arial", size=10, bold=True, color=muted)
+
+    sheet["A5"] = "Lessons"
+    sheet["B5"] = len(ordered_lessons)
+    sheet["D5"] = "Total lesson cost"
+    sheet["E5"] = 0
+    for cell in (sheet["A5"], sheet["D5"]):
+        cell.font = Font(name="Arial", size=10, bold=True, color=dark_green)
+        cell.fill = PatternFill("solid", fgColor=pale_gold)
+    for cell in (sheet["B5"], sheet["E5"]):
+        cell.font = Font(name="Arial", size=12, bold=True, color=teal)
+        cell.border = Border(bottom=thin_line)
+
+    headers = ["Date", "Student", "Tutor", "Lesson length (minutes)", "Time", "Lesson cost"]
+    header_row = 7
+    for column, header in enumerate(headers, start=1):
+        cell = sheet.cell(row=header_row, column=column, value=header)
+        cell.font = Font(name="Arial", size=10, bold=True, color=white)
+        cell.fill = PatternFill("solid", fgColor=teal)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    sheet.row_dimensions[header_row].height = 32
+
+    first_data_row = header_row + 1
+    for row_number, lesson in enumerate(ordered_lessons, start=first_data_row):
+        when = lesson_datetime(lesson)
+        lesson_date = None if when == datetime.min else when.date()
+        lesson_time = None if when == datetime.min else when.time().replace(second=0, microsecond=0)
+        minutes = int(lesson.get("duration_minutes") or 0)
+        client_rate = float(lesson.get("student_rate") or 0)
+        lesson_cost = round(minutes * client_rate / 60, 2)
+        values = [
+            lesson_date,
+            lesson.get("student_name", ""),
+            lesson.get("tutor_name", ""),
+            minutes,
+            lesson_time,
+            lesson_cost,
+        ]
+        for column, value in enumerate(values, start=1):
+            cell = sheet.cell(row=row_number, column=column, value=value)
+            cell.font = Font(name="Arial", size=10, color="203238")
+            cell.border = Border(bottom=thin_line)
+            if row_number % 2 == 0:
+                cell.fill = PatternFill("solid", fgColor="F7FAF8")
+
+    if ordered_lessons:
+        last_data_row = header_row + len(ordered_lessons)
+        sheet["E5"] = f"=SUM(F{first_data_row}:F{last_data_row})"
+        table = Table(displayName="MonthlyInvoiceLessons", ref=f"A{header_row}:F{last_data_row}")
+        table.tableStyleInfo = TableStyleInfo(
+            name="TableStyleMedium2", showFirstColumn=False, showLastColumn=False,
+            showRowStripes=False, showColumnStripes=False,
+        )
+        sheet.add_table(table)
+    else:
+        last_data_row = header_row
+
+    sheet["E5"].number_format = '£#,##0.00'
+    for row_number in range(first_data_row, last_data_row + 1):
+        sheet.cell(row=row_number, column=1).number_format = "dd/mm/yyyy"
+        sheet.cell(row=row_number, column=5).number_format = "hh:mm"
+        sheet.cell(row=row_number, column=6).number_format = '£#,##0.00'
+
+    widths = {"A": 13, "B": 26, "C": 24, "D": 22, "E": 12, "F": 16}
+    for column, width in widths.items():
+        sheet.column_dimensions[column].width = width
+    sheet.freeze_panes = f"A{first_data_row}"
+    sheet.auto_filter.ref = f"A{header_row}:F{last_data_row}"
+    sheet.print_title_rows = f"1:{header_row}"
+    sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.fitToWidth = 1
+    sheet.sheet_properties.pageSetUpPr.fitToPage = True
+    workbook.calculation.fullCalcOnLoad = True
+    workbook.calculation.forceFullCalc = True
+
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
 class Handler(SimpleHTTPRequestHandler):
     def translate_path(self, path):
         rel = unquote(urlparse(path).path).lstrip("/") or "index.html"
@@ -1830,8 +1952,10 @@ class Handler(SimpleHTTPRequestHandler):
             group_by = query.get("group_by", ["date"])[0].lower()
             if group_by not in {"date", "student", "tutor"}:
                 return self.send_json({"error": "Report grouping must be date, student, or tutor."}, 400)
-            if report_format == "xlsx" and (PERSONAL_WORKSPACE or user["role"] != "Master"):
-                return self.send_json({"error": "The agency invoicing workbook is available to the master account only."}, 403)
+            if report_format in {"xlsx", "invoice_list_xlsx"} and (PERSONAL_WORKSPACE or user["role"] != "Master"):
+                return self.send_json({"error": "Agency invoicing workbooks are available to the master account only."}, 403)
+            if report_format == "invoice_list_xlsx" and group_by not in {"date", "student"}:
+                return self.send_json({"error": "Simple invoice lists can be ordered by date or student."}, 400)
             clauses = ["lr.completed_at >= ?", "lr.completed_at < ?"]
             params = [start, end]
             if user["role"] != "Master" or PERSONAL_WORKSPACE:
@@ -1870,7 +1994,7 @@ class Handler(SimpleHTTPRequestHandler):
                     """,
                     params,
                 ))
-            if report_format == "xlsx":
+            if report_format in {"xlsx", "invoice_list_xlsx"}:
                 month_value = query.get("month", [""])[0]
                 if month_value:
                     period_label = datetime.strptime(month_value, "%Y-%m").strftime("%B %Y")
@@ -1881,6 +2005,12 @@ class Handler(SimpleHTTPRequestHandler):
                     period_label = f"{date.fromisoformat(start_value).strftime('%d %B %Y')} to {date.fromisoformat(end_value).strftime('%d %B %Y')}"
                     safe_period = f"{start_value}-to-{end_value}"
                 safe_period = re.sub(r"[^0-9a-z-]+", "-", safe_period.lower()).strip("-") or "report"
+                if report_format == "invoice_list_xlsx":
+                    return self.send_bytes(
+                        build_simple_invoice_list_workbook(lessons, period_label, group_by),
+                        f"{BUSINESS_FILE_PREFIX}-invoice-list-{safe_period}.xlsx",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
                 return self.send_bytes(
                     build_invoicing_workbook(lessons, period_label, group_by),
                     f"{BUSINESS_FILE_PREFIX}-invoicing-{safe_period}.xlsx",

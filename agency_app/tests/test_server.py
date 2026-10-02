@@ -297,6 +297,40 @@ class AgencyApiTests(unittest.TestCase):
             )
         self.assertLess(pdf_text.find("Alpha Student"), pdf_text.find("Zulu Student"))
 
+        simple_student_request = Request(
+            self.base_url + f"/api/reports/lessons?month={month}&format=invoice_list_xlsx&group_by=student"
+        )
+        with self.opener.open(simple_student_request) as response:
+            self.assertIn(f"invoice-list-{month}.xlsx", response.headers["Content-Disposition"])
+            simple_workbook = load_workbook(BytesIO(response.read()), data_only=False)
+        simple_sheet = simple_workbook["Invoice list"]
+        self.assertEqual(
+            [simple_sheet.cell(row=7, column=column).value for column in range(1, 7)],
+            ["Date", "Student", "Tutor", "Lesson length (minutes)", "Time", "Lesson cost"],
+        )
+        self.assertEqual(
+            [simple_sheet.cell(row=row, column=2).value for row in range(8, 11)],
+            ["Alpha Student", "Alpha Student", "Zulu Student"],
+        )
+        self.assertEqual(simple_sheet["F8"].value, 60)
+        self.assertEqual(simple_sheet["E5"].value, "=SUM(F8:F10)")
+
+        simple_date_request = Request(
+            self.base_url + f"/api/reports/lessons?month={month}&format=invoice_list_xlsx&group_by=date"
+        )
+        with self.opener.open(simple_date_request) as response:
+            date_workbook = load_workbook(BytesIO(response.read()), data_only=False)
+        date_sheet = date_workbook["Invoice list"]
+        self.assertEqual(
+            [date_sheet.cell(row=row, column=2).value for row in range(8, 11)],
+            ["Alpha Student", "Zulu Student", "Alpha Student"],
+        )
+        with self.assertRaises(HTTPError) as invalid_simple_order:
+            self.api(
+                f"/api/reports/lessons?month={month}&format=invoice_list_xlsx&group_by=tutor"
+            )
+        self.assertEqual(invalid_simple_order.exception.code, 400)
+
         with self.assertRaises(HTTPError) as invalid_order:
             self.api(f"/api/timesheet?month={month}&order=unknown")
         self.assertEqual(invalid_order.exception.code, 400)
@@ -707,6 +741,12 @@ class AgencyApiTests(unittest.TestCase):
                 method="GET",
             ))
         self.assertEqual(tutor_xlsx_error.exception.code, 403)
+        with self.assertRaises(HTTPError) as tutor_simple_xlsx_error:
+            tutor_opener.open(Request(
+                self.base_url + f"/api/reports/lessons?month={start_at[:7]}&format=invoice_list_xlsx&group_by=date",
+                method="GET",
+            ))
+        self.assertEqual(tutor_simple_xlsx_error.exception.code, 403)
 
     def test_student_can_have_multiple_tutors_with_pairing_specific_rates(self):
         self.login_as_master()
