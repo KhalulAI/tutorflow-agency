@@ -328,6 +328,11 @@ body.tutor #students .grid-two { grid-template-columns: minmax(0, 1fr); }
 .student-table tbody tr:last-child td { border-bottom: 0; }
 .student-table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--soft) 42%, #fff); }
 .student-table tbody tr:hover { background: color-mix(in srgb, var(--gold) 12%, #fff); }
+.tutor-billing-summary-panel { margin-top: 18px; }
+.billing-summary-table-wrap { margin-top: 14px; }
+.billing-summary-table { min-width: 720px; }
+.billing-summary-table th:not(:first-child),
+.billing-summary-table td:not(:first-child) { text-align: right; }
 .student-table td strong { color: var(--ink); }
 .student-table td small { display: block; margin-top: 2px; color: var(--muted); white-space: nowrap; }
 .student-table .email-cell { max-width: 240px; overflow-wrap: anywhere; }

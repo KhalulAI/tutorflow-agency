@@ -1943,6 +1943,74 @@ class Handler(SimpleHTTPRequestHandler):
                 "month_lock": dict(month_lock) if month_lock else None,
             })
 
+        if path == "/api/reports/tutor-monthly-summary":
+            if PERSONAL_WORKSPACE:
+                return self.send_json({"error": "Tutor billing summaries are only available in the agency workspace."}, 404)
+            if user["role"] != "Master":
+                return self.send_json({"error": "Master access required."}, 403)
+            try:
+                month = normalize_month(query.get("month", [datetime.now().strftime("%Y-%m")])[0])
+                if month < "2026-04":
+                    raise ValueError("Tutor billing history begins in April 2026.")
+                if month > datetime.now().strftime("%Y-%m"):
+                    raise ValueError("Choose the current month or an earlier month.")
+                start, end = query_period({"month": [month]})
+            except (TypeError, ValueError) as error:
+                return self.send_json({"error": str(error)}, 400)
+
+            with db() as conn:
+                completed = rows(conn.execute(
+                    """
+                    SELECT lr.tutor_id, u.name AS tutor_name,
+                           COALESCE(lr.duration_minutes, b.duration_minutes, 0) AS duration_minutes,
+                           COALESCE(lr.client_hourly_rate, s.hourly_rate, 0) AS client_hourly_rate,
+                           COALESCE(lr.tutor_hourly_rate, s.tutor_hourly_rate, u.hourly_rate, 0) AS tutor_hourly_rate
+                    FROM lesson_records lr
+                    LEFT JOIN bookings b ON b.booking_id = lr.booking_id
+                    JOIN students s ON s.student_id = lr.student_id
+                    JOIN users u ON u.user_id = lr.tutor_id
+                    WHERE lr.completed_at >= ? AND lr.completed_at < ?
+                    ORDER BY LOWER(u.name), lr.completed_at, lr.lesson_record_id
+                    """,
+                    (start, end),
+                ))
+
+            tutor_totals = {}
+            for lesson in completed:
+                tutor_id = int(lesson["tutor_id"])
+                tutor = tutor_totals.setdefault(tutor_id, {
+                    "tutor_id": tutor_id,
+                    "tutor_name": lesson["tutor_name"],
+                    "lesson_count": 0,
+                    "gross_billed": 0.0,
+                    "tutor_net": 0.0,
+                })
+                hours = float(lesson.get("duration_minutes") or 0) / 60
+                tutor["lesson_count"] += 1
+                tutor["gross_billed"] += hours * float(lesson.get("client_hourly_rate") or 0)
+                tutor["tutor_net"] += hours * float(lesson.get("tutor_hourly_rate") or 0)
+
+            tutors = []
+            for tutor in tutor_totals.values():
+                tutor["gross_billed"] = round(tutor["gross_billed"], 2)
+                tutor["tutor_net"] = round(tutor["tutor_net"], 2)
+                tutor["commission"] = round(tutor["gross_billed"] - tutor["tutor_net"], 2)
+                tutors.append(tutor)
+            tutors.sort(key=lambda item: item["tutor_name"].casefold())
+
+            totals = {
+                "lesson_count": sum(item["lesson_count"] for item in tutors),
+                "gross_billed": round(sum(item["gross_billed"] for item in tutors), 2),
+                "commission": round(sum(item["commission"] for item in tutors), 2),
+                "tutor_net": round(sum(item["tutor_net"] for item in tutors), 2),
+            }
+            return self.send_json({
+                "month": month,
+                "period_label": datetime.strptime(month, "%Y-%m").strftime("%B %Y"),
+                "tutors": tutors,
+                "totals": totals,
+            })
+
         if path == "/api/reports/lessons":
             try:
                 start, end = query_period(query)

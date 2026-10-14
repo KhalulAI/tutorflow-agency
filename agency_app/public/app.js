@@ -115,6 +115,11 @@ const els = {
   downloadReports: $("#downloadReports"),
   downloadSimpleReport: $("#downloadSimpleReport"),
   reportList: $("#reportList"),
+  billingSummaryMonth: $("#billingSummaryMonth"),
+  billingSummaryPreviousMonth: $("#billingSummaryPreviousMonth"),
+  billingSummaryNextMonth: $("#billingSummaryNextMonth"),
+  billingSummaryTotals: $("#billingSummaryTotals"),
+  billingSummaryBody: $("#billingSummaryBody"),
   financePeriod: $("#financePeriod"),
   financeAnchor: $("#financeAnchor"),
   loadFinance: $("#loadFinance"),
@@ -267,7 +272,10 @@ function switchTab(tabName) {
   if (tabName === "calendar") loadCalendar();
   if (tabName === "completed-lessons") loadCompletedLessons();
   if (tabName === "timesheet") loadTimesheet();
-  if (tabName === "reports") loadReports();
+  if (tabName === "reports") {
+    loadReports();
+    loadTutorBillingSummary();
+  }
   if (tabName === "finance") loadFinance();
   if (tabName === "settings") renderSettings();
 }
@@ -307,6 +315,8 @@ async function start() {
   els.completedEnd.value = today();
   els.timesheetMonth.value = currentMonth();
   els.reportMonth.value = currentMonth();
+  els.billingSummaryMonth.value = currentMonth();
+  els.billingSummaryMonth.max = currentMonth();
   els.reportStart.value = `${currentMonth()}-01`;
   els.reportEnd.value = today();
   els.financeAnchor.value = today();
@@ -1508,6 +1518,50 @@ async function loadReports() {
   els.reportList.innerHTML = lessons.length ? summary + lessons.map((lesson) => lessonItem(lesson, rateKey)).join("") : `<div class="notice">No lesson records match this report.</div>`;
 }
 
+function shiftedMonth(month, offset) {
+  const [year, monthNumber] = (month || currentMonth()).split("-").map(Number);
+  const target = new Date(year, monthNumber - 1 + offset, 1);
+  return `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function updateBillingSummaryNavigation() {
+  const selected = els.billingSummaryMonth.value || currentMonth();
+  els.billingSummaryPreviousMonth.disabled = selected <= "2026-04";
+  els.billingSummaryNextMonth.disabled = selected >= currentMonth();
+}
+
+async function loadTutorBillingSummary() {
+  if (personalWorkspace || currentUser?.role !== "Master") return;
+  const month = els.billingSummaryMonth.value || currentMonth();
+  updateBillingSummaryNavigation();
+  els.billingSummaryTotals.textContent = `Loading ${formatMonthLabel(month)}...`;
+  els.billingSummaryBody.innerHTML = "";
+  try {
+    const data = await api(`/api/reports/tutor-monthly-summary?month=${encodeURIComponent(month)}`);
+    const totals = data.totals;
+    els.billingSummaryTotals.textContent = `${data.period_label}: ${totals.lesson_count} completed lessons / ${money(totals.gross_billed)} gross billed / ${money(totals.commission)} agency commission / ${money(totals.tutor_net)} tutor net pay.`;
+    els.billingSummaryBody.innerHTML = data.tutors.length ? data.tutors.map((tutor) => `
+      <tr>
+        <td data-label="Tutor"><strong>${escapeHtml(tutor.tutor_name)}</strong></td>
+        <td data-label="Completed lessons">${tutor.lesson_count}</td>
+        <td data-label="Gross billed">${money(tutor.gross_billed)}</td>
+        <td data-label="Agency commission">${money(tutor.commission)}</td>
+        <td data-label="Tutor net pay"><strong>${money(tutor.tutor_net)}</strong></td>
+      </tr>
+    `).join("") : `<tr><td colspan="5">No completed lessons were recorded for this month.</td></tr>`;
+  } catch (error) {
+    els.billingSummaryTotals.textContent = error.message;
+    els.billingSummaryBody.innerHTML = "";
+  }
+}
+
+function changeBillingSummaryMonth(offset) {
+  const candidate = shiftedMonth(els.billingSummaryMonth.value, offset);
+  if (candidate < "2026-04" || candidate > currentMonth()) return;
+  els.billingSummaryMonth.value = candidate;
+  loadTutorBillingSummary();
+}
+
 function downloadReports() {
   const qs = reportQuery("xlsx");
   window.open(`/api/reports/lessons?${qs.toString()}`, "_blank");
@@ -1701,6 +1755,9 @@ els.reportGroupBy.addEventListener("change", loadReports);
 els.loadReports.addEventListener("click", loadReports);
 els.downloadReports.addEventListener("click", downloadReports);
 els.downloadSimpleReport.addEventListener("click", downloadSimpleReport);
+els.billingSummaryMonth.addEventListener("change", loadTutorBillingSummary);
+els.billingSummaryPreviousMonth.addEventListener("click", () => changeBillingSummaryMonth(-1));
+els.billingSummaryNextMonth.addEventListener("click", () => changeBillingSummaryMonth(1));
 els.financePeriod.addEventListener("change", loadFinance);
 els.financeAnchor.addEventListener("change", loadFinance);
 els.loadFinance.addEventListener("click", loadFinance);

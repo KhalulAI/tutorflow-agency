@@ -669,6 +669,30 @@ class AgencyApiTests(unittest.TestCase):
         _, master_report = self.api(f"/api/reports/lessons?month={start_at[:7]}")
         self.assertEqual(master_report["lessons"][0]["student_rate"], 80)
         self.assertEqual(master_report["lessons"][0]["tutor_rate"], 50)
+        _, billing_summary = self.api(
+            f"/api/reports/tutor-monthly-summary?month={start_at[:7]}"
+        )
+        self.assertEqual(billing_summary["period_label"], datetime.fromisoformat(start_at).strftime("%B %Y"))
+        self.assertEqual(billing_summary["totals"], {
+            "lesson_count": 1,
+            "gross_billed": 80.0,
+            "commission": 30.0,
+            "tutor_net": 50.0,
+        })
+        self.assertEqual(len(billing_summary["tutors"]), 1)
+        self.assertEqual(billing_summary["tutors"][0]["tutor_name"], "Private Rate Tutor")
+        self.assertEqual(billing_summary["tutors"][0]["gross_billed"], 80.0)
+        self.assertEqual(billing_summary["tutors"][0]["commission"], 30.0)
+        self.assertEqual(billing_summary["tutors"][0]["tutor_net"], 50.0)
+        with self.assertRaises(HTTPError) as tutor_billing_error:
+            self.api(
+                f"/api/reports/tutor-monthly-summary?month={start_at[:7]}",
+                opener=tutor_opener,
+            )
+        self.assertEqual(tutor_billing_error.exception.code, 403)
+        with self.assertRaises(HTTPError) as early_billing_error:
+            self.api("/api/reports/tutor-monthly-summary?month=2026-03")
+        self.assertEqual(early_billing_error.exception.code, 400)
         _, filtered_report = self.api(
             f"/api/reports/lessons?start={start_at[:10]}&end={start_at[:10]}&tutor_id={tutor['user_id']}&student_id={student_id}"
         )
@@ -841,6 +865,21 @@ class AgencyApiTests(unittest.TestCase):
             }
         self.assertEqual(lesson_rates[maths["user_id"]], (75, 40))
         self.assertEqual(lesson_rates[english["user_id"]], (70, 45))
+        _, billing_summary = self.api(f"/api/reports/tutor-monthly-summary?month={month}")
+        summary_by_tutor = {item["tutor_name"]: item for item in billing_summary["tutors"]}
+        self.assertEqual(set(summary_by_tutor), {"Maths Tutor", "English Tutor"})
+        self.assertEqual(summary_by_tutor["Maths Tutor"]["gross_billed"], 75.0)
+        self.assertEqual(summary_by_tutor["Maths Tutor"]["commission"], 35.0)
+        self.assertEqual(summary_by_tutor["Maths Tutor"]["tutor_net"], 40.0)
+        self.assertEqual(summary_by_tutor["English Tutor"]["gross_billed"], 70.0)
+        self.assertEqual(summary_by_tutor["English Tutor"]["commission"], 25.0)
+        self.assertEqual(summary_by_tutor["English Tutor"]["tutor_net"], 45.0)
+        self.assertEqual(billing_summary["totals"], {
+            "lesson_count": 2,
+            "gross_billed": 145.0,
+            "commission": 60.0,
+            "tutor_net": 85.0,
+        })
 
         for email, temporary_password in created_tutors:
             tutor_opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))

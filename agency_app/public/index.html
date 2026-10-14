@@ -249,6 +249,35 @@
           </div>
           <div id="reportList" class="list"></div>
         </section>
+        <section class="panel tutor-billing-summary-panel">
+          <div class="directory-heading">
+            <div>
+              <p class="eyebrow">Monthly invoicing view</p>
+              <h3>Tutor Billing Summary</h3>
+              <p class="muted-copy">Completed lessons only. Gross billed is the client total; tutor net is the amount payable to the tutor.</p>
+            </div>
+            <div class="calendar-month-navigation">
+              <button id="billingSummaryPreviousMonth" type="button" aria-label="Show previous billing month">&larr; Previous</button>
+              <input id="billingSummaryMonth" type="month" min="2026-04" aria-label="Tutor billing summary month">
+              <button id="billingSummaryNextMonth" type="button" aria-label="Show next billing month">Next &rarr;</button>
+            </div>
+          </div>
+          <div id="billingSummaryTotals" class="notice" role="status"></div>
+          <div class="table-wrap billing-summary-table-wrap">
+            <table class="student-table billing-summary-table">
+              <thead>
+                <tr>
+                  <th>Tutor</th>
+                  <th>Completed lessons</th>
+                  <th>Gross billed</th>
+                  <th>Agency commission</th>
+                  <th>Tutor net pay</th>
+                </tr>
+              </thead>
+              <tbody id="billingSummaryBody"></tbody>
+            </table>
+          </div>
+        </section>
       </section>
 
       <section class="page" id="finance">
