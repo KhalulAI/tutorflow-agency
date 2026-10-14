@@ -862,6 +862,17 @@ dialog form {
   padding: 20px;
 }
 
+.confirmation-content {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+}
+
+.confirmation-content p {
+  margin: 0;
+  line-height: 1.5;
+}
+
 .dialog-header {
   display: flex;
   align-items: center;

@@ -472,6 +472,20 @@
       </form>
     </dialog>
 
-    <script src="/app.js?v=assignment-layout-1"></script>
+    <dialog id="confirmationDialog">
+      <div class="confirmation-content">
+        <div class="dialog-header">
+          <h2 id="confirmationTitle">Please confirm</h2>
+          <button class="dialog-close" type="button" id="confirmationClose" aria-label="Close" title="Close">&times;</button>
+        </div>
+        <p id="confirmationMessage" class="muted-copy"></p>
+        <div class="dialog-actions">
+          <button class="ghost dark-ghost" type="button" id="confirmationCancel">Cancel</button>
+          <button type="button" id="confirmationAccept">Continue</button>
+        </div>
+      </div>
+    </dialog>
+
+    <script src="/app.js?v=in-app-confirmation-1"></script>
   </body>
 </html>

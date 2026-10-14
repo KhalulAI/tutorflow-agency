@@ -160,6 +160,12 @@ const els = {
   cancelBookingButton: $("#cancelBookingButton"),
   deleteBookingButton: $("#deleteBookingButton"),
   deleteBookingSeriesButton: $("#deleteBookingSeriesButton"),
+  confirmationDialog: $("#confirmationDialog"),
+  confirmationTitle: $("#confirmationTitle"),
+  confirmationMessage: $("#confirmationMessage"),
+  confirmationClose: $("#confirmationClose"),
+  confirmationCancel: $("#confirmationCancel"),
+  confirmationAccept: $("#confirmationAccept"),
   studentRemovalDialog: $("#studentRemovalDialog"),
   studentRemovalForm: $("#studentRemovalForm"),
   studentRemovalId: $("#studentRemovalId"),
@@ -261,6 +267,37 @@ async function api(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || "Request failed.");
   return data;
+}
+
+function requestConfirmation(message, options = {}) {
+  const title = options.title || "Please confirm";
+  const confirmLabel = options.confirmLabel || "Continue";
+  els.confirmationTitle.textContent = title;
+  els.confirmationMessage.textContent = message;
+  els.confirmationAccept.textContent = confirmLabel;
+  els.confirmationAccept.classList.toggle("danger", Boolean(options.danger));
+
+  return new Promise((resolve) => {
+    const finish = (confirmed) => {
+      els.confirmationAccept.removeEventListener("click", accept);
+      els.confirmationCancel.removeEventListener("click", cancel);
+      els.confirmationClose.removeEventListener("click", cancel);
+      els.confirmationDialog.removeEventListener("cancel", escape);
+      if (els.confirmationDialog.open) els.confirmationDialog.close();
+      resolve(confirmed);
+    };
+    const accept = () => finish(true);
+    const cancel = () => finish(false);
+    const escape = (event) => {
+      event.preventDefault();
+      finish(false);
+    };
+    els.confirmationAccept.addEventListener("click", accept);
+    els.confirmationCancel.addEventListener("click", cancel);
+    els.confirmationClose.addEventListener("click", cancel);
+    els.confirmationDialog.addEventListener("cancel", escape);
+    els.confirmationDialog.showModal();
+  });
 }
 
 function switchTab(tabName) {
@@ -703,7 +740,10 @@ async function saveTutorDocument(event) {
 }
 
 async function deleteTutorDocument(documentId) {
-  if (!confirm("Permanently delete this document record and its stored file? This cannot be undone.")) return;
+  if (!await requestConfirmation(
+    "Permanently delete this document record and its stored file? This cannot be undone.",
+    { title: "Delete document?", confirmLabel: "Delete Document", danger: true },
+  )) return;
   await api(`/api/tutor-documents/${documentId}/delete`, { method: "POST", body: "{}" });
   await refreshBaseData();
   await loadTutorDocuments();
@@ -729,7 +769,9 @@ async function editTutor(tutorId) {
 
 async function resetTutorPassword(tutorId) {
   const tutor = tutors.find((item) => Number(item.user_id) === Number(tutorId));
-  if (!tutor || !confirm(`Reset password for ${tutor.name}?`)) return;
+  if (!tutor || !await requestConfirmation(`Reset password for ${tutor.name}?`, {
+    title: "Reset tutor password?", confirmLabel: "Reset Password",
+  })) return;
   const data = await api(`/api/users/${tutorId}/reset-password`, { method: "POST", body: "{}" });
   if (data.email_sent) {
     alert(`Password reset. New login details were emailed to ${data.email}.`);
@@ -743,7 +785,9 @@ async function changeTutorStatus(tutorId) {
   if (!tutor) return;
   const nextActive = !tutor.active;
   const action = nextActive ? "reactivate" : "make inactive";
-  if (!confirm(`Are you sure you want to ${action} ${tutor.name}?`)) return;
+  if (!await requestConfirmation(`Are you sure you want to ${action} ${tutor.name}?`, {
+    title: "Change tutor status?", confirmLabel: "Confirm Change",
+  })) return;
   await api(`/api/users/${tutorId}/status`, {
     method: "POST",
     body: JSON.stringify({ active: nextActive }),
@@ -755,7 +799,10 @@ async function changeTutorStatus(tutorId) {
 async function removeTutor(tutorId) {
   const tutor = tutors.find((item) => Number(item.user_id) === Number(tutorId));
   if (!tutor) return;
-  if (!confirm(`Permanently remove ${tutor.name}? Any assigned students will become unassigned. This cannot be undone.`)) return;
+  if (!await requestConfirmation(
+    `Permanently remove ${tutor.name}? Any assigned students will become unassigned. This cannot be undone.`,
+    { title: "Remove tutor?", confirmLabel: "Remove Tutor", danger: true },
+  )) return;
   try {
     const data = await api(`/api/users/${tutorId}/delete`, { method: "POST", body: "{}" });
     const suffix = data.unassigned_students ? ` ${data.unassigned_students} student(s) were unassigned.` : "";
@@ -920,7 +967,10 @@ async function removeStudent(event) {
   const selected = document.querySelector('input[name="studentRemovalMode"]:checked');
   if (!student || !selected) return;
   const mode = selected.value;
-  if (mode === "delete" && !confirm(`Permanently delete ${student.student_name}, including every booking and lesson note? This cannot be undone.`)) return;
+  if (mode === "delete" && !await requestConfirmation(
+    `Permanently delete ${student.student_name}, including every booking and lesson note? This cannot be undone.`,
+    { title: "Delete student?", confirmLabel: "Delete Student", danger: true },
+  )) return;
   const data = await api(`/api/students/${studentId}/remove`, {
     method: "POST",
     body: JSON.stringify({ mode }),
@@ -1006,7 +1056,10 @@ async function toggleMonthLock() {
   const consequence = nextLocked
     ? "Tutors and the master account will no longer be able to change lessons or timesheets in this month."
     : "Lesson and timesheet changes will be allowed again.";
-  if (!confirm(`${action[0].toUpperCase()}${action.slice(1)} ${formatMonthLabel(els.calendarMonth.value)}?\n\n${consequence}`)) return;
+  if (!await requestConfirmation(
+    `${action[0].toUpperCase()}${action.slice(1)} ${formatMonthLabel(els.calendarMonth.value)}? ${consequence}`,
+    { title: `${nextLocked ? "Lock" : "Unlock"} month?`, confirmLabel: nextLocked ? "Lock Month" : "Unlock Month" },
+  )) return;
   try {
     await api("/api/month-locks", {
       method: "POST",
@@ -1126,7 +1179,9 @@ async function saveBookingEdit(event) {
 }
 
 async function cancelBooking() {
-  if (!confirm("Cancel this lesson?")) return;
+  if (!await requestConfirmation("Cancel this lesson?", {
+    title: "Cancel lesson?", confirmLabel: "Cancel Lesson", danger: true,
+  })) return;
   try {
     await api(`/api/bookings/${els.bookingEditId.value}/cancel`, { method: "POST", body: "{}" });
     els.bookingDialog.close();
@@ -1142,7 +1197,10 @@ async function deleteBooking() {
   const completedWarning = booking?.status === "Completed"
     ? " Its completion record and lesson notes will also be removed from reports, projections and timesheets."
     : "";
-  if (!confirm(`Delete this mistaken lesson entry permanently?${completedWarning} This cannot be undone.`)) return;
+  if (!await requestConfirmation(
+    `Delete this mistaken lesson entry permanently?${completedWarning} This cannot be undone.`,
+    { title: "Delete lesson?", confirmLabel: "Delete Lesson", danger: true },
+  )) return;
   try {
     await api(`/api/bookings/${els.bookingEditId.value}/delete`, { method: "POST", body: "{}" });
     els.bookingDialog.close();
@@ -1162,7 +1220,10 @@ async function deleteBookingSeries() {
       body: JSON.stringify({ scope: "following", preview: true }),
     });
     const lessonWord = preview.count === 1 ? "lesson" : "lessons";
-    if (!confirm(`Permanently delete ${preview.count} ${lessonWord} in this series from ${formatDateTime(booking.start_at)} onwards?\n\nEarlier lessons will remain. This cannot be undone.`)) return;
+    if (!await requestConfirmation(
+      `Permanently delete ${preview.count} ${lessonWord} in this series from ${formatDateTime(booking.start_at)} onwards? Earlier lessons will remain. This cannot be undone.`,
+      { title: "Delete following lessons?", confirmLabel: "Delete Lessons", danger: true },
+    )) return;
     const result = await api(`/api/bookings/${booking.booking_id}/delete`, {
       method: "POST",
       body: JSON.stringify({ scope: "following" }),
@@ -1461,7 +1522,10 @@ async function setTimesheetStatus(status) {
     }
     const tutorName = els.timesheetTutor.selectedOptions[0]?.textContent || "this tutor";
     const monthLabel = formatMonthLabel(els.timesheetMonth.value);
-    if (!window.confirm(`Approve ${tutorName}'s ${monthLabel} timesheet and email the PDF to them now?`)) return;
+    if (!await requestConfirmation(
+      `Approve ${tutorName}'s ${monthLabel} timesheet and email the PDF to them now?`,
+      { title: "Approve and email timesheet?", confirmLabel: "Approve & Email" },
+    )) return;
   }
   try {
     const result = await api("/api/timesheet/status", {
@@ -1665,7 +1729,9 @@ async function saveExpense(event) {
 }
 
 async function deleteExpense(expenseId) {
-  if (!confirm("Delete this expense? This cannot be undone.")) return;
+  if (!await requestConfirmation("Delete this expense? This cannot be undone.", {
+    title: "Delete expense?", confirmLabel: "Delete Expense", danger: true,
+  })) return;
   await api(`/api/expenses/${expenseId}/delete`, { method: "POST", body: "{}" });
   await loadFinance();
 }
