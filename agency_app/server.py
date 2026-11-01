@@ -3131,6 +3131,28 @@ class Handler(SimpleHTTPRequestHandler):
                         booking_id,
                     ),
                 )
+                # A completed booking has a separate immutable-looking lesson row
+                # used by timesheets and reports.  Keep its ownership and rate
+                # snapshot aligned when the master corrects the booking's student,
+                # tutor or duration; otherwise the calendar and tutor timesheet can
+                # disagree about who taught the lesson.
+                conn.execute(
+                    """
+                    UPDATE lesson_records
+                    SET student_id = ?, tutor_id = ?, duration_minutes = ?,
+                        client_hourly_rate = ?, tutor_hourly_rate = ?, updated_at = ?
+                    WHERE booking_id = ?
+                    """,
+                    (
+                        int(payload["student_id"]),
+                        tutor_id,
+                        duration_minutes,
+                        client_hourly_rate,
+                        tutor_hourly_rate,
+                        now_iso(),
+                        booking_id,
+                    ),
+                )
             return self.send_json({"ok": True})
 
         if path.startswith("/api/bookings/") and path.endswith("/cancel"):

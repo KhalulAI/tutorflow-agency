@@ -772,6 +772,91 @@ class AgencyApiTests(unittest.TestCase):
             ))
         self.assertEqual(tutor_simple_xlsx_error.exception.code, 403)
 
+    def test_reassigning_completed_booking_moves_calendar_and_timesheet_to_new_tutor(self):
+        self.login_as_master()
+        server.send_tutor_credentials_email = lambda *_args, **_kwargs: "message-id"
+        credentials = {}
+        for name, email, rate in (
+            ("Original Tutor", "original@example.com", 35),
+            ("Replacement Tutor", "replacement@example.com", 45),
+        ):
+            _, created = self.api(
+                "/api/users", "POST", {"name": name, "email": email, "hourly_rate": rate}
+            )
+            credentials[email] = created["temporary_password"]
+        _, users = self.api("/api/users")
+        tutors = {item["email"]: item for item in users["users"] if item["role"] == "Tutor"}
+        original = tutors["original@example.com"]
+        replacement = tutors["replacement@example.com"]
+
+        _, created_student = self.api(
+            "/api/students",
+            "POST",
+            {
+                "student_name": "Reassigned Student",
+                "hourly_rate": 90,
+                "tutor_assignments": [
+                    {"tutor_id": original["user_id"], "tutor_hourly_rate": 35},
+                    {"tutor_id": replacement["user_id"], "tutor_hourly_rate": 45},
+                ],
+            },
+        )
+        month = datetime.now().strftime("%Y-%m")
+        start_at = f"{month}-18T16:00:00"
+        self.api(
+            "/api/bookings",
+            "POST",
+            {
+                "student_id": created_student["student_id"],
+                "tutor_id": original["user_id"],
+                "start_at": start_at,
+                "duration_minutes": 60,
+            },
+        )
+        _, calendar = self.api(f"/api/bookings?month={month}")
+        booking_id = calendar["bookings"][0]["booking_id"]
+        self.api(
+            f"/api/bookings/{booking_id}/complete",
+            "POST",
+            {"parent_summary": "Existing note is preserved.", "emailed_to_parent": False},
+        )
+        self.api(
+            f"/api/bookings/{booking_id}/update",
+            "POST",
+            {
+                "student_id": created_student["student_id"],
+                "tutor_id": replacement["user_id"],
+                "start_at": start_at,
+                "duration_minutes": 60,
+                "notes": "Corrected tutor",
+            },
+        )
+
+        with server.db() as connection:
+            lesson = connection.execute(
+                "SELECT tutor_id, tutor_hourly_rate, parent_summary FROM lesson_records WHERE booking_id = ?",
+                (booking_id,),
+            ).fetchone()
+        self.assertEqual(lesson["tutor_id"], replacement["user_id"])
+        self.assertEqual(lesson["tutor_hourly_rate"], 45)
+        self.assertEqual(lesson["parent_summary"], "Existing note is preserved.")
+
+        for email, expected_count in (("original@example.com", 0), ("replacement@example.com", 1)):
+            opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+            self.api(
+                "/api/login",
+                "POST",
+                {"email": email, "password": credentials[email]},
+                opener=opener,
+            )
+            _, visible_calendar = self.api(f"/api/bookings?month={month}", opener=opener)
+            _, visible_timesheet = self.api(f"/api/timesheet?month={month}", opener=opener)
+            self.assertEqual(len(visible_calendar["bookings"]), expected_count)
+            self.assertEqual(len(visible_timesheet["lessons"]), expected_count)
+            if expected_count:
+                self.assertNotIn("client_hourly_rate", visible_calendar["bookings"][0])
+                self.assertNotIn("student_rate", visible_timesheet["lessons"][0])
+
     def test_student_can_have_multiple_tutors_with_pairing_specific_rates(self):
         self.login_as_master()
         server.send_tutor_credentials_email = lambda *_args, **_kwargs: "message-id"
