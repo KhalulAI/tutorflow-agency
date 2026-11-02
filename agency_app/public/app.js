@@ -1515,29 +1515,33 @@ async function submitTimesheet() {
 
 async function setTimesheetStatus(status) {
   if (currentUser.role !== "Master" || !els.timesheetTutor.value) return;
-  if (status === "Approved") {
-    if (!timesheetPreviewReady) {
-      els.timesheetSummary.textContent = "Preview the PDF before approving this timesheet.";
-      return;
-    }
-    const tutorName = els.timesheetTutor.selectedOptions[0]?.textContent || "this tutor";
-    const monthLabel = formatMonthLabel(els.timesheetMonth.value);
-    if (!await requestConfirmation(
-      `Approve ${tutorName}'s ${monthLabel} timesheet and email the PDF to them now?`,
-      { title: "Approve and email timesheet?", confirmLabel: "Approve & Email" },
-    )) return;
-  }
   try {
+    if (status === "Approved") {
+      if (!timesheetPreviewReady) {
+        els.timesheetSummary.textContent = "Preview the PDF before approving this timesheet.";
+        return;
+      }
+      const tutorName = els.timesheetTutor.selectedOptions[0]?.textContent || "this tutor";
+      const monthLabel = formatMonthLabel(els.timesheetMonth.value);
+      if (!await requestConfirmation(
+        `Approve ${tutorName}'s ${monthLabel} timesheet and email the PDF to them now?`,
+        { title: "Approve and email timesheet?", confirmLabel: "Approve & Email" },
+      )) return;
+      els.approveTimesheet.disabled = true;
+      els.timesheetSummary.textContent = `Sending ${monthLabel} timesheet to ${tutorName}...`;
+    }
     const result = await api("/api/timesheet/status", {
       method: "POST",
       body: JSON.stringify({ month: els.timesheetMonth.value, tutor_id: els.timesheetTutor.value, status }),
     });
     await loadTimesheet();
     if (result.email_sent) {
-      els.timesheetSummary.textContent = `Timesheet approved and emailed to ${result.tutor_email}.`;
+      const copied = result.cc_email ? ` A copy was sent to ${result.cc_email}.` : "";
+      els.timesheetSummary.textContent = `Timesheet approved and emailed to ${result.tutor_email}.${copied}`;
     }
   } catch (error) {
-    els.timesheetSummary.textContent = error.message;
+    els.timesheetSummary.textContent = `Timesheet was not emailed: ${error.message}`;
+    if (status === "Approved" && timesheetPreviewReady) els.approveTimesheet.disabled = false;
   }
 }
 

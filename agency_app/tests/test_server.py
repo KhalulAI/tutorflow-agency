@@ -1746,6 +1746,7 @@ class PostmarkTests(unittest.TestCase):
             send.call_args.args[2],
         ))
         self.assertIn("has been approved", send.call_args.args[2])
+        self.assertEqual(send.call_args.kwargs["cc"], "scott@swleducation.co.uk")
         attachment = send.call_args.kwargs["attachments"][0]
         self.assertEqual(attachment["ContentType"], "application/pdf")
         self.assertEqual(base64.b64decode(attachment["Content"]), b"%PDF-test")

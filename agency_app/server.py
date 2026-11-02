@@ -34,6 +34,9 @@ BUSINESS_NAME = os.environ.get("BUSINESS_NAME", "").strip() or "SWL Education Lt
 APP_NAME = os.environ.get("APP_NAME", "").strip() or "TutorFlow Agency"
 WORKSPACE_NAME = os.environ.get("WORKSPACE_NAME", "").strip() or "Agency"
 POSTMARK_FROM_NAME = os.environ.get("EMAIL_SENDER_NAME", "").strip() or "SWL Education - TutorFlow"
+TIMESHEET_APPROVAL_CC = os.environ.get(
+    "TIMESHEET_APPROVAL_CC", "scott@swleducation.co.uk"
+).strip()
 BUSINESS_FILE_PREFIX = (re.sub(r"[^a-z0-9]+", "-", BUSINESS_NAME.lower()).strip("-") or "business") if BUSINESS_NAME != "SWL Education Ltd" else "swl-education"
 DEFAULT_VAT_THRESHOLD = 90_000.0
 MAX_TUTOR_DOCUMENT_BYTES = 5 * 1024 * 1024
@@ -790,6 +793,7 @@ def send_postmark_email(
     body: str,
     reply_to: str = "",
     attachments: list[dict] | None = None,
+    cc: str = "",
 ) -> str:
     token = os.environ.get("POSTMARK_SERVER_TOKEN", "").strip()
     from_email = os.environ.get("POSTMARK_FROM_EMAIL", "").strip()
@@ -808,6 +812,8 @@ def send_postmark_email(
     }
     if reply_to:
         message["ReplyTo"] = reply_to
+    if cc:
+        message["Cc"] = cc
     if attachments:
         message["Attachments"] = attachments
     request = Request(
@@ -881,6 +887,7 @@ Kind regards,
             "Content": base64.b64encode(pdf).decode("ascii"),
             "ContentType": "application/pdf",
         }],
+        cc=TIMESHEET_APPROVAL_CC,
     )
 
 
@@ -3324,6 +3331,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "email_sent": status == "Approved",
                 "postmark_message_id": message_id,
                 "tutor_email": tutor.get("email", "") if status == "Approved" else "",
+                "cc_email": TIMESHEET_APPROVAL_CC if status == "Approved" else "",
             })
 
         return self.send_json({"error": "Not found"}, 404)
